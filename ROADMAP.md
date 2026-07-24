@@ -12,6 +12,14 @@ learning project. The original Python source is preserved for reference at
 [`Ammar-Sagheer/reactive-ai-agent-nodejs`](https://github.com/Ammar-Sagheer/reactive-ai-agent-nodejs)
 (despite the name, that repo currently just holds the original Python code we're porting from).
 
+**Scope decision:** rather than seeding a fresh synthetic database like the original project does
+(Faker-generated customers/orders/reviews), this rebuild queries the **real `saam-s-store` Supabase
+database** — the same one the live store uses. This is a deliberate scaled-down feature set: we
+have `products`/`categories`/`product_images` (and eventually `orders` for analytics-style
+questions) rather than the original's richer schema (customers, reviews, etc.). Feature-parity
+work (self-healing SQL, semantic cache, RAG, charts, voice, streaming, tracing) still applies —
+only the underlying data is narrower and real instead of synthetic.
+
 This is a **learning-first** build: every new technology introduced gets a short "what is it and
 why do we need it" explanation before we write code with it, not just working code with no
 context.
@@ -35,7 +43,7 @@ context.
 |---|---|---|---|
 | Web framework | FastAPI | Next.js (API routes / Route Handlers) | Same app also serves the frontend, unlike the Python version which was backend-only |
 | Orchestration | LangGraph | `@langchain/langgraph` | Direct JS port exists from the same team — same concepts apply |
-| LLM calls | OpenAI Python SDK | `openai` npm package | We'll decide Gemini vs OpenAI when we get there — TBD |
+| LLM calls | OpenAI Python SDK | `@google/genai` npm package (Gemini) | Reusing the same Gemini API key already set up for `reactive-google-ai-agent` — no new billing account needed. (Claude API was considered but requires separate console.anthropic.com billing beyond the Claude Pro subscription — deferred.) |
 | DB access | SQLAlchemy (async) + asyncpg | `pg` (node-postgres) or an ORM (Drizzle/Prisma) — TBD when we reach Phase 1 | |
 | Vector search (semantic cache, few-shot, RAG) | FAISS | TBD — options: Postgres `pgvector` extension, or a Node vector lib | Decided per-phase, not up front |
 | Session memory | Redis | `ioredis` or `redis` npm client | Same tool, just the JS client |
@@ -79,12 +87,15 @@ phases are usable/demoable on their own, not just scaffolding.
 yet.
 
 **Next step:** Start Phase 1 — scaffold the Next.js project and get a basic one-shot NL-to-SQL
-chat endpoint working against a Postgres database, with a short intro to Next.js API routes and
-`pg`/the chosen DB client before writing the code.
+chat endpoint working against the `saam-s-store` Supabase database, with a short intro to Next.js
+API routes and the chosen Postgres client before writing the code.
+
+**Decided:**
+- **LLM:** Gemini, reusing the existing `reactive-google-ai-agent` API key.
+- **Database:** the real `saam-s-store` Supabase project, not a fresh synthetic one. Phase 1 will
+  reuse the same restricted `chatbot_readonly` role/pattern from `reactive-google-ai-agent`
+  (SELECT-only on `products`/`categories`/`product_images`), extending scope later (e.g. `orders`)
+  only if a phase actually needs it.
 
 **Open decisions not yet made:**
-- OpenAI vs Gemini for the LLM (the earlier `reactive-google-ai-agent` project used Gemini — may
-  reuse that key, or switch to OpenAI to match the original Python project more closely)
-- Which Postgres client/ORM to use in Node
-- Which database this connects to (a fresh seeded DB like the original, or reuse the `saam-s-store`
-  Supabase database)
+- Which Postgres client/ORM to use in Node (plain `pg` vs an ORM like Drizzle) — decided in Phase 1
