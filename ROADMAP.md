@@ -20,6 +20,16 @@ questions) rather than the original's richer schema (customers, reviews, etc.). 
 work (self-healing SQL, semantic cache, RAG, charts, voice, streaming, tracing) still applies —
 only the underlying data is narrower and real instead of synthetic.
 
+**Scaling back up later is fully possible and cheap.** The pipeline is schema-driven, not
+schema-hardcoded — the LLM generates SQL from whatever schema description it's given, so growing
+toward DataMind-level richness (customers, reviews, etc.) later is a **data/prompt change, not an
+architecture change**: (1) add the missing tables to `saam-s-store`'s Supabase project (or point a
+separate instance of this same app at a synthetic seeded DB if a full DataMind-style demo dataset
+is ever wanted), (2) update the schema description fed to the LLM, (3) widen the `chatbot_readonly`
+role's `GRANT`s to cover the new tables. None of that touches the LangGraph pipeline, caching,
+RAG, voice, or streaming code. Treat this as a future, isolated task — not a blocker for building
+the scaled-down version now.
+
 This is a **learning-first** build: every new technology introduced gets a short "what is it and
 why do we need it" explanation before we write code with it, not just working code with no
 context.
