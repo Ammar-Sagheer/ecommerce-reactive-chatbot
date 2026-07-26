@@ -36,7 +36,7 @@ context.
 
 ## Original Feature List (what "done" looks like)
 
-- [ ] Natural-language-to-SQL chat (generate, validate, execute)
+- [x] Natural-language-to-SQL chat (generate, validate, execute) — Phase 1, verified working
 - [ ] Self-healing SQL (auto-retry on query error, up to N attempts)
 - [ ] Semantic cache (embedding similarity — paraphrased questions hit the same cached answer)
 - [ ] Auto few-shot learning (successful queries get stored and reused as prompt examples)
@@ -96,28 +96,43 @@ phases are usable/demoable on their own, not just scaffolding.
 
 **Last updated:** 2026-07-26
 
-**Where we are:** Phase 1 complete and pushed to `main`. Built: Next.js scaffold, `app/_lib/schema.js`
-(schema description for the LLM, matching `saam-s-store`'s real `products`/`categories`/
-`product_images` tables), `app/_lib/sqlGuard.js` (SELECT-only validator), `app/_lib/db.js` (`pg`
-pool via the Supabase pooler), `app/_lib/agent.js` (Gemini SQL-decision + summarize, ported from
-`reactive-google-ai-agent`'s `agent.py`), `app/api/chat/route.js`, and a minimal test page at `/`.
+**Where we are:** ✅ **Phase 1 complete and fully verified.** Built: Next.js scaffold,
+`app/_lib/schema.js` (schema description for the LLM, matching `saam-s-store`'s real
+`products`/`categories`/`product_images` tables), `app/_lib/sqlGuard.js` (SELECT-only validator),
+`app/_lib/db.js` (`pg` pool via the Supabase pooler), `app/_lib/agent.js` (Gemini SQL-decision +
+summarize, ported from `reactive-google-ai-agent`'s `agent.py`), `app/api/chat/route.js`, and a
+minimal test page at `/`.
 
-**Verified so far:** the Gemini-only path (greetings / off-topic refusal) works end-to-end —
-tested with `curl` against a local `npm run dev`, got a correct on-topic greeting response.
+**Verified:**
+- Gemini-only path (greetings / off-topic refusal) — tested via `curl` against local `npm run dev`.
+- **Full DB round-trip** (NL → SQL → Postgres query → natural-language answer) — tested on Ammar's
+  own machine (VS Code, real network access, unlike this build container which can only reach
+  port 443 outbound and can't reach the Postgres pooler's port 6543). A real product question
+  returned a correct, data-backed answer.
 
-**⚠️ NOT yet verified: the actual database round-trip.** This dev/build container's network
-policy only allows outbound HTTPS (port 443) — confirmed by testing raw TCP to the Supabase
-pooler's port 6543, which fails, while port 443 to the same host succeeds. So a real SQL-requiring
-question (e.g. "do you have nail kits") cannot be tested from *this* environment; it timed out
-after ~2.3 minutes with a swallowed error (since fixed — `agent.js`'s catch block now
-`console.error`s the real failure, and `db.js`'s pool has a 10s `connectionTimeoutMillis` so a
-genuine outage fails fast instead of hanging).
+**Bugs found and fixed during local testing:**
+1. `GEMINI_MODEL=gemini-2.5-flash` returned a 404 ("no longer available to new users") — fixed by
+   setting `GEMINI_MODEL=gemini-3.5-flash-lite` in `.env.local` (matches the model already used in
+   `reactive-google-ai-agent`).
+2. `.env.local`'s `DATABASE_URL` still had the literal `PROJECT_REF`/`PASSWORD` placeholder text
+   from `.env.example` instead of the real Supabase project ref/password — surfaced as a Postgres
+   `tenant/user ... not found` error. Fixed by pasting the real pooler connection string.
+3. Chat input text was invisible when the browser/OS was in dark mode — `app/globals.css`'s
+   `prefers-color-scheme: dark` block sets the page's default text color to near-white, and the
+   `<input>` had no explicit background/text color of its own, so it inherited near-white text on
+   its own white background. Fixed in `app/page.js` by giving the input explicit
+   `bg-white text-zinc-900 placeholder-zinc-400` classes so it no longer depends on inherited
+   page-level theme colors.
 
-**Next step:** Run `npm install && npm run dev` on a machine with normal network access (your own
-laptop, or after deploying), copy `.env.example` to `.env.local` with real values, and test a
-product question end-to-end. If it works there, Phase 1 is confirmed complete and we move to
-Phase 2 (self-healing SQL retry). If it fails, the console error log will show why — report it
-back here.
+**Side note:** also hand-created a throwaway `ammar` login role (SELECT-only, same grant pattern
+as `chatbot_readonly`) on a *different* Supabase project (`siwosrjmbrgoautfmzfy`) purely to
+verify the role-creation/connection-string mechanics — unrelated to this app, not part of any
+phase, safe to ignore/delete.
+
+**Next step:** Start Phase 2 (self-healing SQL) — add retry logic so that when Gemini generates a
+SQL query that fails (syntax error, wrong column name, etc.), the app automatically asks Gemini to
+fix it using the actual database error message, up to a small retry limit — mirroring
+`reactive-google-ai-agent`'s `_self_heal_sql` function.
 
 **Open decisions not yet made:**
 - None blocking — Postgres client (`pg`) was decided and used in Phase 1 (see Tech Mapping table).
