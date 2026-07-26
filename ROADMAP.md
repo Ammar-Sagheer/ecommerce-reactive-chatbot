@@ -54,7 +54,7 @@ context.
 | Web framework | FastAPI | Next.js (API routes / Route Handlers) | Same app also serves the frontend, unlike the Python version which was backend-only |
 | Orchestration | LangGraph | `@langchain/langgraph` | Direct JS port exists from the same team — same concepts apply |
 | LLM calls | OpenAI Python SDK | `@google/genai` npm package (Gemini) | Reusing the same Gemini API key already set up for `reactive-google-ai-agent` — no new billing account needed. (Claude API was considered but requires separate console.anthropic.com billing beyond the Claude Pro subscription — deferred.) |
-| DB access | SQLAlchemy (async) + asyncpg | `pg` (node-postgres) or an ORM (Drizzle/Prisma) — TBD when we reach Phase 1 | |
+| DB access | SQLAlchemy (async) + asyncpg | `pg` (node-postgres) | Decided in Phase 1 — Gemini generates raw SQL strings at runtime, so a bare driver matches better than an ORM query-builder. Bonus: `pg` doesn't use server-side prepared statements by default, so unlike `asyncpg` we don't need the `statement_cache_size=0` PgBouncer workaround. |
 | Vector search (semantic cache, few-shot, RAG) | FAISS | TBD — options: Postgres `pgvector` extension, or a Node vector lib | Decided per-phase, not up front |
 | Session memory | Redis | `ioredis` or `redis` npm client | Same tool, just the JS client |
 | Voice STT | OpenAI Whisper API | `openai` npm package (same API) | |
@@ -68,11 +68,14 @@ Each phase should be fully working and tested before moving to the next. Order i
 phases are usable/demoable on their own, not just scaffolding.
 
 - **Phase 0 — Planning** ✅ done (this doc)
-- **Phase 1 — Foundation**: Next.js project scaffold, Postgres connection, a basic `/api/chat`
-  route that does one-shot NL→SQL→answer (no caching, no self-heal yet — the simplest possible
-  working version)
-- **Phase 2 — Self-healing SQL**: retry logic when a generated query fails, plus a SQL safety
-  guard (SELECT-only enforcement, same idea as `sql_guard.py` in the earlier Python backend)
+- **Phase 1 — Foundation** ✅ done: Next.js project scaffold, Postgres connection (`pg` +
+  Supabase's Transaction Pooler, same restricted `chatbot_readonly` role as before), a basic
+  `/api/chat` route doing one-shot NL→SQL→answer via Gemini (no caching, no self-heal retry yet —
+  a basic SELECT-only safety guard was pulled forward into this phase since running raw
+  LLM-generated SQL with zero validation isn't an acceptable baseline even for a "simplest version").
+  A minimal chat UI at `/` for manual testing.
+- **Phase 2 — Self-healing SQL**: retry logic when a generated query fails (the safety guard
+  itself already landed in Phase 1 — see above)
 - **Phase 3 — LangGraph.js orchestration**: refactor Phase 1/2's linear code into an explicit
   state graph (classify → generate → validate → execute → heal → finalize), introducing LangGraph
   concepts properly
@@ -91,21 +94,30 @@ phases are usable/demoable on their own, not just scaffolding.
 
 ## Current Status
 
-**Last updated:** 2026-07-24
+**Last updated:** 2026-07-26
 
-**Where we are:** Phase 0 complete. Repo created and connected, roadmap written. Nothing built
-yet.
+**Where we are:** Phase 1 complete and pushed to `main`. Built: Next.js scaffold, `app/_lib/schema.js`
+(schema description for the LLM, matching `saam-s-store`'s real `products`/`categories`/
+`product_images` tables), `app/_lib/sqlGuard.js` (SELECT-only validator), `app/_lib/db.js` (`pg`
+pool via the Supabase pooler), `app/_lib/agent.js` (Gemini SQL-decision + summarize, ported from
+`reactive-google-ai-agent`'s `agent.py`), `app/api/chat/route.js`, and a minimal test page at `/`.
 
-**Next step:** Start Phase 1 — scaffold the Next.js project and get a basic one-shot NL-to-SQL
-chat endpoint working against the `saam-s-store` Supabase database, with a short intro to Next.js
-API routes and the chosen Postgres client before writing the code.
+**Verified so far:** the Gemini-only path (greetings / off-topic refusal) works end-to-end —
+tested with `curl` against a local `npm run dev`, got a correct on-topic greeting response.
 
-**Decided:**
-- **LLM:** Gemini, reusing the existing `reactive-google-ai-agent` API key.
-- **Database:** the real `saam-s-store` Supabase project, not a fresh synthetic one. Phase 1 will
-  reuse the same restricted `chatbot_readonly` role/pattern from `reactive-google-ai-agent`
-  (SELECT-only on `products`/`categories`/`product_images`), extending scope later (e.g. `orders`)
-  only if a phase actually needs it.
+**⚠️ NOT yet verified: the actual database round-trip.** This dev/build container's network
+policy only allows outbound HTTPS (port 443) — confirmed by testing raw TCP to the Supabase
+pooler's port 6543, which fails, while port 443 to the same host succeeds. So a real SQL-requiring
+question (e.g. "do you have nail kits") cannot be tested from *this* environment; it timed out
+after ~2.3 minutes with a swallowed error (since fixed — `agent.js`'s catch block now
+`console.error`s the real failure, and `db.js`'s pool has a 10s `connectionTimeoutMillis` so a
+genuine outage fails fast instead of hanging).
+
+**Next step:** Run `npm install && npm run dev` on a machine with normal network access (your own
+laptop, or after deploying), copy `.env.example` to `.env.local` with real values, and test a
+product question end-to-end. If it works there, Phase 1 is confirmed complete and we move to
+Phase 2 (self-healing SQL retry). If it fails, the console error log will show why — report it
+back here.
 
 **Open decisions not yet made:**
-- Which Postgres client/ORM to use in Node (plain `pg` vs an ORM like Drizzle) — decided in Phase 1
+- None blocking — Postgres client (`pg`) was decided and used in Phase 1 (see Tech Mapping table).
