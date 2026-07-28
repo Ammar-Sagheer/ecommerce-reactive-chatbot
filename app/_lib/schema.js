@@ -19,6 +19,7 @@ TABLE products (
   category_id integer NULL REFERENCES categories(id),
   stock integer,                -- units available; 0 means out of stock
   is_featured boolean,
+  rating numeric,               -- TEMP-SELF-HEAL-TEST: this column does not actually exist in the DB
   created_at timestamptz
 )
 
