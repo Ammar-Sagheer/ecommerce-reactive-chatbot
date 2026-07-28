@@ -61,6 +61,36 @@ async function generateSqlDecision(question, history) {
   return JSON.parse(response.text);
 }
 
+async function healSql(question, failedSql, errorMessage) {
+  const healPrompt = `Your previous SQL failed.
+
+Original question: ${question}
+Failed SQL: ${failedSql}
+Database error: ${errorMessage}
+
+Produce a corrected SELECT query following the same rules.`;
+
+  const response = await ai.models.generateContent({
+    model: MODEL,
+    contents: [{ role: "user", parts: [{ text: healPrompt }] }],
+    config: {
+      systemInstruction: SQL_SYSTEM_PROMPT,
+      responseMimeType: "application/json",
+      responseSchema: SQL_DECISION_SCHEMA,
+      temperature: 0,
+    },
+  });
+  return JSON.parse(response.text);
+}
+
+function logSqlFailure(label, err, sql) {
+  if (err instanceof UnsafeQueryError) {
+    console.warn(`${label} (guard rejection):`, err.message, "| sql:", sql);
+  } else {
+    console.error(`${label} (query error):`, err, "| sql:", sql);
+  }
+}
+
 async function summarize(question, rows) {
   const prompt = `You are a friendly storefront assistant. Given the visitor's question and the
 database rows below (JSON), write a concise, natural-language answer. If the rows are empty, say
@@ -86,16 +116,35 @@ export async function answerQuestion(question, history = []) {
     return { answer: decision.directAnswer || "I'm not sure how to help with that." };
   }
 
+  let sql = decision.sql;
+  let rows;
+
   try {
-    const rows = await runSelect(decision.sql);
-    const answer = await summarize(question, rows);
-    return { answer, sqlUsed: decision.sql, rows };
-  } catch (err) {
-    if (err instanceof UnsafeQueryError) {
-      console.warn("SQL rejected by guard:", err.message, "| sql:", decision.sql);
+    rows = await runSelect(sql);
+  } catch (firstError) {
+    logSqlFailure("SQL failed, attempting self-heal", firstError, sql);
+
+    let healed;
+    try {
+      healed = await healSql(question, sql, firstError.message);
+    } catch (healRequestError) {
+      console.error("Self-heal request itself failed:", healRequestError);
+      return { answer: "Sorry, I couldn't look that up right now. Try rephrasing your question." };
+    }
+
+    if (!healed.needsSql || !healed.sql) {
       return { answer: "I couldn't find an answer to that in the store's catalog." };
     }
-    console.error("Query execution failed:", err);
-    return { answer: "Sorry, I couldn't look that up right now. Try rephrasing your question." };
+
+    sql = healed.sql;
+    try {
+      rows = await runSelect(sql);
+    } catch (secondError) {
+      logSqlFailure("Self-heal failed", secondError, sql);
+      return { answer: "Sorry, I couldn't look that up right now. Try rephrasing your question." };
+    }
   }
+
+  const answer = await summarize(question, rows);
+  return { answer, sqlUsed: sql, rows };
 }
