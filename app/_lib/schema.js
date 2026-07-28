@@ -19,7 +19,6 @@ TABLE products (
   category_id integer NULL REFERENCES categories(id),
   stock integer,                -- units available; 0 means out of stock
   is_featured boolean,
-  rating numeric,               -- customer rating out of 5
   created_at timestamptz
 )
 
