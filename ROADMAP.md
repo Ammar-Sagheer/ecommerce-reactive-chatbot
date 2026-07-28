@@ -114,13 +114,20 @@ attempt before giving up.
   outbound, not the Postgres pooler's port 6543). A real product question returned a correct,
   data-backed answer.
 
-**Verified — Phase 2:**
-- Code compiles and the non-DB paths (greeting) still work, checked from this build container.
-- **Not yet tested: an actual self-heal in action** (i.e. a query that fails, then succeeds after
-  Gemini's correction) — same network limitation as Phase 1 applies here, so this needs a real
-  test on Ammar's machine. Easiest way to trigger it deliberately: ask something oddly phrased that
-  might make Gemini reference a wrong column name, or temporarily rename a column to force a
-  failure and watch the console log the `"SQL failed, attempting self-heal"` message.
+**Verified — Phase 2:** ✅ real self-heal confirmed end to end, with logs. Test method: temporarily
+added a fake `rating` column to `SCHEMA_DESCRIPTION` (reverted immediately after — not in `main`
+anymore) so Gemini would confidently write SQL referencing a column that doesn't actually exist in
+Supabase. Asking "what is the average rating of your products" produced:
+1. Gemini wrote `SELECT AVG(rating) AS average_rating FROM products;`
+2. Postgres rejected it: `error: column "rating" does not exist` (code `42703`)
+3. Console logged `"SQL failed, attempting self-heal (query error): ..."` exactly as designed
+4. `healSql()` sent the failed SQL + that error message back to Gemini
+5. Gemini recovered gracefully — dropped the nonexistent column and answered with what it could
+   actually determine (real product count), rather than crashing or returning the generic fallback
+
+(First test attempt didn't trigger it — an early version of the fake column's SQL comment literally
+said "this column does not actually exist," which Gemini read and correctly avoided querying at
+all. Lesson: don't spoil your own test data.)
 
 **Bugs found and fixed during Phase 1 local testing:**
 1. `GEMINI_MODEL=gemini-2.5-flash` returned a 404 ("no longer available to new users") — fixed by
@@ -138,8 +145,7 @@ as `chatbot_readonly`) on a *different* Supabase project (`siwosrjmbrgoautfmzfy`
 verify the role-creation/connection-string mechanics — unrelated to this app, not part of any
 phase, safe to ignore/delete.
 
-**Next step:** Verify Phase 2's self-heal actually triggers and works on a real failing query, then
-start Phase 3 — refactor Phase 1/2's linear code into an explicit LangGraph.js state graph
+**Next step:** Start Phase 3 — refactor Phase 1/2's linear code into an explicit LangGraph.js state graph
 (classify → generate → validate → execute → heal → finalize).
 
 **Open decisions not yet made:**
