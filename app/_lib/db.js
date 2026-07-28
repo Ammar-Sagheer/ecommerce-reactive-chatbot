@@ -14,13 +14,21 @@ function getPool() {
   return pool;
 }
 
-export async function runSelect(sql, limitRows = 20) {
-  const safeSql = validateSelectOnly(sql);
+// No SQL validation here — the caller (the graph's "validate" node) is
+// responsible for that. This function only knows how to run a query.
+export async function executeQuery(sql, limitRows = 20) {
   const client = await getPool().connect();
   try {
-    const result = await client.query(safeSql);
+    const result = await client.query(sql);
     return result.rows.slice(0, limitRows);
   } finally {
     client.release();
   }
+}
+
+// Convenience wrapper (validate + execute in one call) — used by anything
+// that doesn't need the two steps to be separate graph nodes.
+export async function runSelect(sql, limitRows = 20) {
+  const safeSql = validateSelectOnly(sql);
+  return executeQuery(safeSql, limitRows);
 }

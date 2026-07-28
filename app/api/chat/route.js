@@ -1,4 +1,4 @@
-import { answerQuestion } from "@/app/_lib/agent";
+import { answerQuestion } from "@/app/_lib/graph";
 
 export async function POST(request) {
   const body = await request.json();
