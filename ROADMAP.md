@@ -52,7 +52,7 @@ context.
 | Concern | Original (Python) | Node.js/Next.js equivalent | Notes |
 |---|---|---|---|
 | Web framework | FastAPI | Next.js (API routes / Route Handlers) | Same app also serves the frontend, unlike the Python version which was backend-only |
-| Orchestration | LangGraph | `@langchain/langgraph` | Direct JS port exists from the same team — same concepts apply |
+| Orchestration | LangGraph | `@langchain/langgraph` (v1.4.8) | Direct JS port exists from the same team — same concepts apply. Used in Phase 3 (`app/_lib/graph.js`): `StateGraph` + `Annotation.Root` for state, `.addNode`/`.addEdge`/`.addConditionalEdges` for the graph shape. |
 | LLM calls | OpenAI Python SDK | `@google/genai` npm package (Gemini) | Reusing the same Gemini API key already set up for `reactive-google-ai-agent` — no new billing account needed. (Claude API was considered but requires separate console.anthropic.com billing beyond the Claude Pro subscription — deferred.) |
 | DB access | SQLAlchemy (async) + asyncpg | `pg` (node-postgres) | Decided in Phase 1 — Gemini generates raw SQL strings at runtime, so a bare driver matches better than an ORM query-builder. Bonus: `pg` doesn't use server-side prepared statements by default, so unlike `asyncpg` we don't need the `statement_cache_size=0` PgBouncer workaround. |
 | Vector search (semantic cache, few-shot, RAG) | FAISS | TBD — options: Postgres `pgvector` extension, or a Node vector lib | Decided per-phase, not up front |
@@ -79,9 +79,16 @@ phases are usable/demoable on their own, not just scaffolding.
   new `healSql()` function, asking for one corrected query. If Gemini can't produce a fix, or the
   corrected query fails too, a generic "couldn't look that up" answer is returned. One retry only
   (matches `reactive-google-ai-agent`'s `_self_heal_sql` — no unbounded retry loop).
-- **Phase 3 — LangGraph.js orchestration**: refactor Phase 1/2's linear code into an explicit
-  state graph (classify → generate → validate → execute → heal → finalize), introducing LangGraph
-  concepts properly
+- **Phase 3 — LangGraph.js orchestration** ✅ done: replaced the linear `try/catch` control flow
+  with an explicit `StateGraph` in the new `app/_lib/graph.js`. Six nodes (`generate`, `validate`,
+  `execute`, `heal`, `summarize`, `finalize`) connected by conditional edges that encode exactly
+  the same one-retry self-heal logic from Phase 2, now as an explicit, inspectable graph shape
+  instead of nested try/catch. `app/_lib/agent.js` was trimmed down to just the three
+  Gemini-calling functions (`generateSqlDecision`, `healSql`, `summarize`) — the graph owns all
+  control flow now. `app/_lib/db.js` gained `executeQuery()` (pure execution, no validation) so
+  "validate" and "execute" could become two separate, real graph nodes instead of one combined
+  step. `route.js` now imports `answerQuestion` from `graph.js` instead of `agent.js` — its public
+  shape (`{answer, sqlUsed, rows}`) is unchanged, so nothing else needed to change.
 - **Phase 4 — Semantic cache**: embedding-based similarity cache so paraphrased questions reuse
   answers
 - **Phase 5 — Auto few-shot learning**: store successful query examples, inject top-K similar
@@ -99,13 +106,14 @@ phases are usable/demoable on their own, not just scaffolding.
 
 **Last updated:** 2026-07-27
 
-**Where we are:** ✅ **Phase 1 and Phase 2 both done.** Phase 1 built the Next.js scaffold,
+**Where we are:** ✅ **Phases 1, 2, and 3 all done.** Phase 1 built the Next.js scaffold,
 `app/_lib/schema.js` (schema description for the LLM), `app/_lib/sqlGuard.js` (SELECT-only
-validator), `app/_lib/db.js` (`pg` pool via the Supabase pooler), `app/_lib/agent.js` (Gemini
-SQL-decision + summarize), `app/api/chat/route.js`, and a minimal test page at `/`. Phase 2 added
-`healSql()` to `agent.js`: on any `runSelect` failure (guard rejection or real Postgres error),
-the failing SQL + question + actual error message are sent back to Gemini for one corrected
-attempt before giving up.
+validator), `app/_lib/db.js` (`pg` pool via the Supabase pooler), `app/api/chat/route.js`, and a
+minimal test page at `/`. Phase 2 added self-healing (fixed SQL failures by feeding the error back
+to Gemini). Phase 3 replaced the linear code with an explicit LangGraph.js `StateGraph` in the new
+`app/_lib/graph.js` — six nodes (`generate`/`validate`/`execute`/`heal`/`summarize`/`finalize`)
+connected by conditional edges. `app/_lib/agent.js` now holds only the three pure Gemini-calling
+functions; the graph owns all control flow.
 
 **Verified — Phase 1:**
 - Gemini-only path (greetings / off-topic refusal) — tested via `curl`.
@@ -145,8 +153,17 @@ as `chatbot_readonly`) on a *different* Supabase project (`siwosrjmbrgoautfmzfy`
 verify the role-creation/connection-string mechanics — unrelated to this app, not part of any
 phase, safe to ignore/delete.
 
-**Next step:** Start Phase 3 — refactor Phase 1/2's linear code into an explicit LangGraph.js state graph
-(classify → generate → validate → execute → heal → finalize).
+**Verified — Phase 3:** code compiles; greeting and off-topic-refusal paths tested via `curl` and
+route through the graph correctly (`generate` → conditional → `finalize` → `END`). **Not yet
+retested: the actual self-heal loop through the new graph** (`validate`/`execute` failing → `heal`
+→ looping back to `validate`) — same network limitation as before means this needs a real test on
+Ammar's machine, e.g. reusing the same temporary-fake-`rating`-column trick from Phase 2's
+verification, to confirm the graph's routing reproduces the exact same behavior as the old
+try/catch version.
+
+**Next step:** Confirm Phase 3's self-heal loop works identically to Phase 2 on a real failing
+query, then start Phase 4 — semantic cache (embedding-based similarity, so paraphrased questions
+reuse a cached answer instead of re-querying).
 
 **Open decisions not yet made:**
 - None blocking — Postgres client (`pg`) was decided and used in Phase 1 (see Tech Mapping table).
