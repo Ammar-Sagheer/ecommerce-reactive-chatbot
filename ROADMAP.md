@@ -104,7 +104,7 @@ phases are usable/demoable on their own, not just scaffolding.
 
 ## Current Status
 
-**Last updated:** 2026-07-27
+**Last updated:** 2026-07-28
 
 **Where we are:** ✅ **Phases 1, 2, and 3 all done.** Phase 1 built the Next.js scaffold,
 `app/_lib/schema.js` (schema description for the LLM), `app/_lib/sqlGuard.js` (SELECT-only
@@ -153,16 +153,26 @@ as `chatbot_readonly`) on a *different* Supabase project (`siwosrjmbrgoautfmzfy`
 verify the role-creation/connection-string mechanics — unrelated to this app, not part of any
 phase, safe to ignore/delete.
 
-**Verified — Phase 3:** code compiles; greeting and off-topic-refusal paths tested via `curl` and
-route through the graph correctly (`generate` → conditional → `finalize` → `END`). **Not yet
-retested: the actual self-heal loop through the new graph** (`validate`/`execute` failing → `heal`
-→ looping back to `validate`) — same network limitation as before means this needs a real test on
-Ammar's machine, e.g. reusing the same temporary-fake-`rating`-column trick from Phase 2's
-verification, to confirm the graph's routing reproduces the exact same behavior as the old
-try/catch version.
+**Verified — Phase 3:** ✅ fully confirmed on Ammar's machine, including the self-heal loop through
+the new graph. Test method: temporarily added a fake `weight_grams` column to
+`SCHEMA_DESCRIPTION` (reverted immediately after). Two attempts were needed to phrase a question
+that actually triggered SQL generation — "what is the total weight..." and "what is the heaviest
+product" were both treated as out-of-scope by Gemini's initial classification (no SQL attempted at
+all); "list products sorted by weight" finally worked. Traced from the logs:
+1. `generateNode` wrote `SELECT name, slug, weight_grams FROM products WHERE weight_grams IS NOT
+   NULL ORDER BY weight_grams DESC LIMIT 1`
+2. `validateNode` passed it (valid SELECT syntax)
+3. `executeNode` ran it → Postgres rejected it (`column "weight_grams" does not exist`, logged by
+   `graph.js`'s own `executeNode` — confirmed the new graph is what's actually running, not
+   leftover old code)
+4. `afterExecute` correctly routed to `"heal"` (error present, not yet healed)
+5. `healNode` asked Gemini to fix it — this time Gemini recognized the column isn't real and
+   returned `needsSql: false` with a graceful explanation, instead of guessing again
+6. `afterHeal` correctly routed straight to `"finalize"` (since `!needsSql`), which returned that
+   graceful `directAnswer` — arguably better than Phase 2's original behavior, which discarded a
+   graceful heal-step answer in favor of always showing a generic hardcoded fallback message.
 
-**Next step:** Confirm Phase 3's self-heal loop works identically to Phase 2 on a real failing
-query, then start Phase 4 — semantic cache (embedding-based similarity, so paraphrased questions
+**Next step:** Start Phase 4 — semantic cache (embedding-based similarity, so paraphrased questions
 reuse a cached answer instead of re-querying).
 
 **Open decisions not yet made:**
