@@ -19,7 +19,6 @@ TABLE products (
   category_id integer NULL REFERENCES categories(id),
   stock integer,                -- units available; 0 means out of stock
   is_featured boolean,
-  weight_grams integer,         -- product weight in grams, for shipping calculations
   created_at timestamptz
 )
 
