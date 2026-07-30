@@ -42,7 +42,9 @@ context.
   Phase 4, code complete
 - [x] Auto few-shot learning (successful queries get stored and reused as prompt examples) —
   Phase 5, verified
-- [ ] RAG fallback (answer knowledge questions that don't need a database query)
+- [x] RAG fallback (answer knowledge questions that don't need a database query) — Phase 6, code
+  complete, uses **placeholder demo content** (see Current Status — must be replaced with real
+  store policy docs before this app faces real customer traffic)
 - [ ] Chart auto-detection from result rows (bar/line)
 - [ ] Session memory (rolling conversation window, so follow-up questions have context)
 - [ ] Voice I/O (speech-to-text input, text-to-speech output, streamed)
@@ -113,7 +115,18 @@ phases are usable/demoable on their own, not just scaffolding.
   through the same `executeNode`). `agent.js`'s `generateSqlDecision` gained an `examples` parameter
   and a `buildSqlSystemPrompt()` helper that appends them to the system instruction only when
   present — with an empty `sql_examples` table, behavior is identical to Phase 4.
-- **Phase 6 — RAG fallback**: answer non-SQL knowledge questions from a document source
+- **Phase 6 — RAG fallback** ✅ code complete: answers store-policy/general questions (shipping,
+  returns, payment, contact, "about us") that aren't in the product database, instead of wrongly
+  refusing them as off-topic. The classification call gained a third path — `needsRag` alongside
+  the existing `needsSql` — so Gemini now picks one of: query the database / answer from retrieved
+  knowledge / greet-or-refuse. Reuses the exact pgvector similarity-search pattern from Phase 4/5,
+  pointed at a new `knowledge_base` table. New `app/_lib/rag.js` (`findRelevantChunks`), a new
+  `answerFromKnowledge()` in `agent.js` (answers ONLY from retrieved text, explicitly instructed to
+  say "I don't have that information" rather than guess — the groundedness property that makes RAG
+  not just a fancier way to hallucinate), and one new graph node (`rag`) wired into the existing
+  routing after `generate`/`heal` alongside `validate`. **Uses placeholder demo content** (see
+  Current Status) — seeded via a new standalone script, `scripts/seedKnowledgeBase.mjs`, run once
+  locally.
 - **Phase 7 — Session memory**: Redis-backed rolling conversation window
 - **Phase 8 — Chart generation**: auto-detect chart type from result rows
 - **Phase 9 — WebSocket streaming**: live token-by-token + pipeline-progress updates
@@ -126,7 +139,18 @@ phases are usable/demoable on their own, not just scaffolding.
 
 **Last updated:** 2026-07-30
 
-**Where we are:** ✅ **Phases 1-5 all done and verified.** Phase 1 built the Next.js
+**Where we are:** ✅ **Phases 1-5 done and verified; Phase 6 (RAG fallback) code complete,
+verification pending** (needs Ammar's machine, same network limitation as always — plus the
+one-time `npm run seed:knowledge` step). Phases 1-5 are merged to `main`; Phase 6 is on its own
+branch.
+
+**⚠️ Placeholder content reminder:** the `knowledge_base` table (seeded by
+`scripts/seedKnowledgeBase.mjs`) contains clearly fictional shipping/returns/payment/contact/about
+text, written only to prove the RAG mechanism works — not real store policy. **Ask Ammar for real
+policy documents before this app is ever pointed at real customer/store traffic** — he explicitly
+asked to be reminded of this when that time comes, so don't skip re-raising it.
+
+Phase 1 built the Next.js
 scaffold, `app/_lib/schema.js` (schema description for the LLM), `app/_lib/sqlGuard.js`
 (SELECT-only validator), `app/_lib/db.js` (`pg` pool via the Supabase pooler), `app/api/chat/route.js`,
 and a minimal test page at `/`. Phase 2 added self-healing (fixed SQL failures by feeding the error
@@ -303,8 +327,21 @@ Gemini calls); few-shot only enriches the existing `generate` call's prompt on a
 call count as Phase 3, just a better-informed one. The payoff is consistency/correctness for novel
 questions, not fewer round-trips.
 
-**Next step:** Start Phase 6 — RAG fallback (answer non-SQL knowledge questions from a document
-source).
+**Verified — Phase 6:** ⏳ not yet verified end to end — code complete, `npm run build` and
+`eslint` both pass, `knowledge_base` table/index/RLS/grants applied and confirmed present. Not yet
+seeded (needs `npm run seed:knowledge` run locally with a real `GEMINI_API_KEY`/`DATABASE_URL`,
+since this build container can't reach the Postgres pooler). Actual round-trip testing (ask a
+policy question, confirm it's answered from the seeded content and not refused as off-topic; ask
+something the knowledge base genuinely doesn't cover and confirm it says so instead of guessing)
+needs Ammar's machine.
+
+**Next step:** Run `npm run seed:knowledge` once, then verify Phase 6 on Ammar's machine — ask a
+shipping/returns/payment/contact question and confirm it's answered (watch for the `RAG: grounding
+answer in N knowledge chunk(s)` log line) instead of getting the old "I can only help with products"
+refusal; ask something unrelated to both products and store policy and confirm it's still refused;
+ask something store-related but not in the 5 placeholder topics and confirm it says it doesn't have
+that information rather than inventing an answer. Once verified, merge to `main` and start Phase 7
+— session memory (Redis-backed rolling conversation window).
 
 **Open decisions not yet made:**
 - None blocking — Postgres client (`pg`) was decided and used in Phase 1 (see Tech Mapping table).

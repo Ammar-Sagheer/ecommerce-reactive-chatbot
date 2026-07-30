@@ -1,9 +1,10 @@
 import { StateGraph, Annotation, START, END } from "@langchain/langgraph";
-import { generateSqlDecision, healSql, summarize } from "./agent";
+import { generateSqlDecision, healSql, summarize, answerFromKnowledge } from "./agent";
 import { validateSelectOnly, UnsafeQueryError } from "./sqlGuard";
 import { executeQuery } from "./db";
 import { findSimilarCached, storeCachedAnswer } from "./cache";
 import { findSimilarExamples, storeExample } from "./fewshot";
+import { findRelevantChunks } from "./rag";
 
 // The shape of the state every node reads from and writes back to.
 // Each Annotation() field defaults to "last write wins" — a node returning
@@ -12,6 +13,7 @@ const StateAnnotation = Annotation.Root({
   question: Annotation(),
   history: Annotation(),
   needsSql: Annotation(),
+  needsRag: Annotation(),
   sql: Annotation(),
   directAnswer: Annotation(),
   rows: Annotation(),
@@ -46,6 +48,7 @@ async function generateNode(state) {
   const decision = await generateSqlDecision(state.question, state.history, examples);
   return {
     needsSql: decision.needsSql,
+    needsRag: decision.needsRag,
     sql: decision.sql,
     directAnswer: decision.directAnswer,
     error: null,
@@ -81,11 +84,23 @@ async function healNode(state) {
   const healed = await healSql(state.question, state.sql, state.error.message);
   return {
     needsSql: healed.needsSql,
+    needsRag: healed.needsRag,
     sql: healed.sql,
     directAnswer: healed.directAnswer,
     healed: true,
     error: null,
   };
+}
+
+async function ragNode(state) {
+  const chunks = await findRelevantChunks(state.question);
+  console.log(
+    chunks.length > 0
+      ? `RAG: grounding answer in ${chunks.length} knowledge chunk(s) for: ${state.question}`
+      : `RAG: no relevant knowledge found for: ${state.question}`
+  );
+  const answer = await answerFromKnowledge(state.question, chunks);
+  return { answer };
 }
 
 async function summarizeNode(state) {
@@ -134,7 +149,9 @@ function afterCacheLookup(state) {
 }
 
 function afterGenerate(state) {
-  return !state.needsSql || !state.sql ? "finalize" : "validate";
+  if (state.needsSql && state.sql) return "validate";
+  if (state.needsRag) return "rag";
+  return "finalize";
 }
 
 function afterValidate(state) {
@@ -148,7 +165,9 @@ function afterExecute(state) {
 }
 
 function afterHeal(state) {
-  return !state.needsSql || !state.sql ? "finalize" : "validate";
+  if (state.needsSql && state.sql) return "validate";
+  if (state.needsRag) return "rag";
+  return "finalize";
 }
 
 // ---- Build and compile the graph --------------------------------------
@@ -159,15 +178,17 @@ const graph = new StateGraph(StateAnnotation)
   .addNode("validate", validateNode)
   .addNode("execute", executeNode)
   .addNode("heal", healNode)
+  .addNode("rag", ragNode)
   .addNode("summarize", summarizeNode)
   .addNode("finalize", finalizeNode)
   .addNode("cacheStore", cacheStoreNode)
   .addEdge(START, "cacheLookup")
   .addConditionalEdges("cacheLookup", afterCacheLookup, ["generate", "finalize"])
-  .addConditionalEdges("generate", afterGenerate, ["validate", "finalize"])
+  .addConditionalEdges("generate", afterGenerate, ["validate", "rag", "finalize"])
   .addConditionalEdges("validate", afterValidate, ["execute", "heal", "finalize"])
   .addConditionalEdges("execute", afterExecute, ["summarize", "heal", "finalize"])
-  .addConditionalEdges("heal", afterHeal, ["validate", "finalize"])
+  .addConditionalEdges("heal", afterHeal, ["validate", "rag", "finalize"])
+  .addEdge("rag", "finalize")
   .addEdge("summarize", "finalize")
   .addEdge("finalize", "cacheStore")
   .addEdge("cacheStore", END)

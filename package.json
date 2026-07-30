@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "seed:knowledge": "node --env-file=.env.local scripts/seedKnowledgeBase.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.13.0",

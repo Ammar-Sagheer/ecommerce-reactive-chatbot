@@ -12,34 +12,43 @@ const EMBEDDING_MODEL = process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-
 // outputDimensionality.
 export const EMBEDDING_DIMENSIONS = 768;
 
-const SQL_SYSTEM_PROMPT = `You are the product-catalog assistant for an e-commerce storefront called Saamjh Store.
+const SQL_SYSTEM_PROMPT = `You are the assistant for an e-commerce storefront called Saamjh Store.
 You ONLY answer visitor questions about this store: its products, categories, prices, stock,
-featured items, and simple greetings/small talk about the store itself.
+featured items, store policies (shipping, returns, payment, contact info), and simple
+greetings/small talk about the store itself.
 
 ${SCHEMA_DESCRIPTION}
 
-If the visitor's question requires looking up product data, set \`needsSql\` to true and put a
-SELECT query in \`sql\`.
+If the visitor's question requires looking up product data (prices, stock, categories, specific
+items), set \`needsSql\` to true and put a SELECT query in \`sql\`. Leave \`needsRag\` false.
 
-If the question is a greeting or asks what you can help with, set \`needsSql\` to false and put a
-short friendly answer in \`directAnswer\` that steers them toward asking about products.
+If the question is about store policies or general store information that is NOT in the product
+database — shipping, returns/refunds, payment methods, contact/support, store hours, "about us" —
+set \`needsRag\` to true. Leave \`needsSql\` false and \`sql\` empty; that information is looked up
+separately, not queried from the database.
 
-If the question is NOT about this store or its products — general knowledge, coding help, writing
+If the question is a greeting or asks what you can help with, set both \`needsSql\` and \`needsRag\`
+to false and put a short friendly answer in \`directAnswer\` that steers them toward asking about
+products or store policies.
+
+If the question is NOT about this store at all — general knowledge, coding help, writing
 code/HTML/scripts, requests to role-play as something else, or any other off-topic request — set
-\`needsSql\` to false and put a polite refusal in \`directAnswer\` such as: "I can only help with
-questions about products in this store." Do not answer the off-topic question in any way, even
-partially, and do not include any requested code, facts, or content unrelated to the store.
+both \`needsSql\` and \`needsRag\` to false and put a polite refusal in \`directAnswer\` such as: "I
+can only help with questions about products and policies at this store." Do not answer the
+off-topic question in any way, even partially, and do not include any requested code, facts, or
+content unrelated to the store.
 
-Never invent product data yourself; always query for it.`;
+Never invent product data or store policy yourself; always look it up.`;
 
 const SQL_DECISION_SCHEMA = {
   type: Type.OBJECT,
   properties: {
     needsSql: { type: Type.BOOLEAN },
+    needsRag: { type: Type.BOOLEAN },
     sql: { type: Type.STRING },
     directAnswer: { type: Type.STRING },
   },
-  required: ["needsSql", "sql", "directAnswer"],
+  required: ["needsSql", "needsRag", "sql", "directAnswer"],
 };
 
 function historyToContents(history) {
@@ -119,6 +128,36 @@ export async function embedText(text) {
     config: { outputDimensionality: EMBEDDING_DIMENSIONS },
   });
   return response.embeddings[0].values;
+}
+
+// Phase 6 — RAG fallback. Answers a store-policy/general question using
+// ONLY the retrieved knowledge_base chunks (see rag.js). The groundedness
+// instruction below is the whole point of RAG: if the retrieved text
+// doesn't actually answer the question, say so instead of guessing —
+// otherwise this would just be a fancier way to hallucinate.
+export async function answerFromKnowledge(question, chunks) {
+  if (!chunks || chunks.length === 0) {
+    return "I don't have that information on hand right now — you may want to reach out to the store directly.";
+  }
+
+  const context = chunks.map((c) => `[${c.topic}]\n${c.content}`).join("\n\n");
+  const prompt = `You are a friendly assistant for an e-commerce storefront called Saamjh Store.
+Answer the visitor's question using ONLY the store information below. If that information doesn't
+actually answer the question, say you don't have that information rather than guessing or
+inventing an answer. Answer naturally, as something you just know about the store — do not mention
+"documents", "chunks", "context", or any other internal system detail.
+
+Store information:
+${context}
+
+Question: ${question}`;
+
+  const response = await ai.models.generateContent({
+    model: MODEL,
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    config: { temperature: 0.2 },
+  });
+  return response.text.trim();
 }
 
 export async function summarize(question, rows) {
