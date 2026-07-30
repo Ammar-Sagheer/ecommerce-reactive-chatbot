@@ -40,7 +40,8 @@ context.
 - [x] Self-healing SQL (auto-retry on query error, up to N attempts) — Phase 2, code complete
 - [x] Semantic cache (embedding similarity — paraphrased questions hit the same cached answer) —
   Phase 4, code complete
-- [ ] Auto few-shot learning (successful queries get stored and reused as prompt examples)
+- [x] Auto few-shot learning (successful queries get stored and reused as prompt examples) —
+  Phase 5, verified
 - [ ] RAG fallback (answer knowledge questions that don't need a database query)
 - [ ] Chart auto-detection from result rows (bar/line)
 - [ ] Session memory (rolling conversation window, so follow-up questions have context)
@@ -100,7 +101,7 @@ phases are usable/demoable on their own, not just scaffolding.
   freshly-computed *cacheable* answer). "Cacheable" excludes the two hardcoded pipeline-failure
   fallback strings (guard rejection / unrecoverable query error) so a temporary failure doesn't get
   permanently cached — everything else (real data answers, greetings, graceful refusals) is cached.
-- **Phase 5 — Auto few-shot learning** ✅ code complete: every SQL query that actually executes
+- **Phase 5 — Auto few-shot learning** ✅ done: every SQL query that actually executes
   without error gets stored as a `(question, sql)` example; future questions pull the top-K most
   similar past examples (via the same pgvector approach as Phase 4) and hand them to Gemini as
   concrete precedent before it generates new SQL. Unlike the semantic cache, this never
@@ -125,9 +126,7 @@ phases are usable/demoable on their own, not just scaffolding.
 
 **Last updated:** 2026-07-30
 
-**Where we are:** ✅ **Phases 1-4 done and verified; Phase 5 (auto few-shot learning) code
-complete, verification pending** (needs Ammar's machine, same network limitation as always). Merged
-to `main` through Phase 4; Phase 5 is on its own branch. Phase 1 built the Next.js
+**Where we are:** ✅ **Phases 1-5 all done and verified.** Phase 1 built the Next.js
 scaffold, `app/_lib/schema.js` (schema description for the LLM), `app/_lib/sqlGuard.js`
 (SELECT-only validator), `app/_lib/db.js` (`pg` pool via the Supabase pooler), `app/api/chat/route.js`,
 and a minimal test page at `/`. Phase 2 added self-healing (fixed SQL failures by feeding the error
@@ -286,20 +285,26 @@ threshold isn't so loose that unrelated questions falsely share answers. Termina
 expected `Semantic cache miss...`/`Semantic cache hit...` lines, no `type "vector" does not exist"`
 errors after the fixes.
 
-**Verified — Phase 5:** ⏳ not yet verified end to end — code complete, `npm run build` and
-`eslint` both pass, `sql_examples` table/index/RLS/grants applied and confirmed present in the
-Supabase project, and the role already had the right `extensions` schema access from the Phase 4
-fix (confirmed before writing app code this time, not after). Actual round-trip testing (ask a
-question, confirm it's stored in `sql_examples`, ask a *related-but-not-paraphrased* question and
-confirm the example gets pulled into the prompt and `use_count` increments) needs Ammar's machine,
-same network limitation as every other phase.
+**Verified — Phase 5:** ✅ confirmed end to end on Ammar's machine. First test attempt ("what's your
+cheapest product?") was a false start — it hit the *Phase 4* cache (near-duplicate of an
+already-cached question from earlier testing) and never reached `generateNode`, so few-shot never
+fired. Picked genuinely fresh questions instead:
+1. `"which products are currently on sale?"` → cache miss, no examples yet (table was empty),
+   generated and stored `SELECT name, slug, price, sale_price FROM products WHERE sale_price IS NOT
+   NULL AND stock > 0 ORDER BY (price - sale_price) DESC LIMIT 20`.
+2. `"do you have any discounted items?"` → cache miss (different enough wording), terminal showed
+   `Few-shot: pulled 1 example(s) into the prompt`, and Gemini generated **byte-for-byte identical
+   SQL** to the stored example instead of a different-but-also-valid query. First row's `use_count`
+   incremented to `1`, confirming retrieval + prompt injection both worked, not just storage.
 
-**Next step:** Verify Phase 5 on Ammar's machine — ask a product question, check `sql_examples` for
-a new row; ask a different-but-related question (not a close-enough paraphrase to hit the Phase 4
-cache) and confirm via `use_count`/`last_hit_at`-style bookkeeping (there's no `last_used_at` column
-yet, only `use_count` — add one if that turns out to matter) that the earlier example got pulled in.
-Once verified, merge to `main` and start Phase 6 — RAG fallback (answer non-SQL knowledge questions
-from a document source).
+This also clarified an important scope point worth recording: few-shot does **not** reduce Gemini
+calls the way the Phase 4 cache does. A cache hit skips `generate` and `summarize` entirely (zero
+Gemini calls); few-shot only enriches the existing `generate` call's prompt on a cache *miss* — same
+call count as Phase 3, just a better-informed one. The payoff is consistency/correctness for novel
+questions, not fewer round-trips.
+
+**Next step:** Start Phase 6 — RAG fallback (answer non-SQL knowledge questions from a document
+source).
 
 **Open decisions not yet made:**
 - None blocking — Postgres client (`pg`) was decided and used in Phase 1 (see Tech Mapping table).
