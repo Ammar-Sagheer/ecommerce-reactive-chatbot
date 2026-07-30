@@ -115,8 +115,7 @@ phases are usable/demoable on their own, not just scaffolding.
 
 **Last updated:** 2026-07-30
 
-**Where we are:** ✅ **Phases 1-3 done and verified; Phase 4 (semantic cache) code complete,
-verification pending** (same network limitation as always — see below). Phase 1 built the Next.js
+**Where we are:** ✅ **Phases 1-4 all done and verified.** Phase 1 built the Next.js
 scaffold, `app/_lib/schema.js` (schema description for the LLM), `app/_lib/sqlGuard.js`
 (SELECT-only validator), `app/_lib/db.js` (`pg` pool via the Supabase pooler), `app/api/chat/route.js`,
 and a minimal test page at `/`. Phase 2 added self-healing (fixed SQL failures by feeding the error
@@ -236,21 +235,23 @@ all); "list products sorted by weight" finally worked. Traced from the logs:
    graceful `directAnswer` — arguably better than Phase 2's original behavior, which discarded a
    graceful heal-step answer in favor of always showing a generic hardcoded fallback message.
 
-**Verified — Phase 4:** ⏳ not yet verified end to end — code complete and reviewed, `npm run build`
-and `eslint` both pass, and the `semantic_cache` table/index/grants were applied directly to the
-`saam-s-store` Supabase project and confirmed present. Actual round-trip testing (does a paraphrase
-really hit the cache, does a genuinely different question miss it, does `hit_count` increment) needs
-Ammar's machine, same as Phases 1-3 — this build container can reach Supabase's HTTPS
-management API (used above to apply the migration) but not the Postgres pooler's port 6543 that the
-running app itself connects through.
+**Verified — Phase 4:** ✅ confirmed end to end on Ammar's machine after fixing the two permission
+bugs above (schema `USAGE` + `search_path`, both needed a dev-server restart to take effect since
+`pg`'s connection pool caches search_path per connection). Real traffic through the running app
+produced 9 distinct rows in `semantic_cache`, with genuine hits: `"what is the cheapest product on
+store"` → `hit_count: 2`, `"hello"` → `hit_count: 1`, plus a hit on a rephrasing of the price
+question. Different questions ("how many products on store", "and which one is the least
+expensive", greetings, etc.) each got their own row instead of colliding — confirms the similarity
+threshold isn't so loose that unrelated questions falsely share answers. Terminal logs showed the
+expected `Semantic cache miss...`/`Semantic cache hit...` lines, no `type "vector" does not exist"`
+errors after the fixes.
 
-**Next step:** Verify Phase 4 on Ammar's machine (ask something, ask a paraphrase, confirm the
-second call is fast and doesn't re-invoke Gemini's SQL-generation step — e.g. add a temporary
-console.log in `cacheLookupNode`/`cacheStoreNode`, or check `hit_count`/`last_hit_at` in
-`semantic_cache` via the Supabase dashboard). Then start Phase 5 — auto few-shot learning (store
-successful query examples, inject top-K similar ones into future prompts) — can likely reuse the
-same pgvector approach and `app/_lib/cache.js`-style pattern, just against a different table storing
-`{question, sql}` pairs instead of `{question, answer}`.
+**Next step:** Start Phase 5 — auto few-shot learning (store successful query examples, inject
+top-K similar ones into future prompts). Can likely reuse the same pgvector approach and
+`app/_lib/cache.js`-style pattern established in Phase 4, just against a different table storing
+`{question, sql}` pairs instead of `{question, answer}` — and this time remember to grant both
+`USAGE` on the `extensions` schema *and* set `chatbot_readonly`'s `search_path` up front, instead of
+finding it the hard way again.
 
 **Open decisions not yet made:**
 - None blocking — Postgres client (`pg`) was decided and used in Phase 1 (see Tech Mapping table).
