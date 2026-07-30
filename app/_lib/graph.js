@@ -2,6 +2,7 @@ import { StateGraph, Annotation, START, END } from "@langchain/langgraph";
 import { generateSqlDecision, healSql, summarize } from "./agent";
 import { validateSelectOnly, UnsafeQueryError } from "./sqlGuard";
 import { executeQuery } from "./db";
+import { findSimilarCached, storeCachedAnswer } from "./cache";
 
 // The shape of the state every node reads from and writes back to.
 // Each Annotation() field defaults to "last write wins" — a node returning
@@ -17,10 +18,18 @@ const StateAnnotation = Annotation.Root({
   healed: Annotation(), // true once we've already tried self-healing once
   answer: Annotation(),
   sqlUsed: Annotation(),
+  fromCache: Annotation(), // true once cacheLookup found a hit — skip re-storing it
+  cacheable: Annotation(), // whether finalize's answer is worth writing to the cache
 });
 
 // ---- Nodes -----------------------------------------------------------
 // A node is just a function: (state) => partial state update.
+
+async function cacheLookupNode(state) {
+  const cached = await findSimilarCached(state.question);
+  if (!cached) return { fromCache: false };
+  return { ...cached, fromCache: true };
+}
 
 async function generateNode(state) {
   const decision = await generateSqlDecision(state.question, state.history);
@@ -70,18 +79,43 @@ async function summarizeNode(state) {
 
 function finalizeNode(state) {
   if (state.answer) {
-    return { answer: state.answer, sqlUsed: state.sqlUsed, rows: state.rows };
+    // Either a fresh summarize() answer or a cache hit passed straight
+    // through — either way it's already a good, deterministic answer.
+    return { answer: state.answer, sqlUsed: state.sqlUsed, rows: state.rows, cacheable: true };
   }
   if (!state.needsSql || !state.sql) {
-    return { answer: state.directAnswer || "I'm not sure how to help with that." };
+    // Greeting / off-topic refusal — deterministic for a given question, so
+    // still worth caching even though it never touched the database.
+    return { answer: state.directAnswer || "I'm not sure how to help with that.", cacheable: true };
   }
   if (state.error instanceof UnsafeQueryError) {
-    return { answer: "I couldn't find an answer to that in the store's catalog." };
+    return {
+      answer: "I couldn't find an answer to that in the store's catalog.",
+      cacheable: false,
+    };
   }
-  return { answer: "Sorry, I couldn't look that up right now. Try rephrasing your question." };
+  return {
+    answer: "Sorry, I couldn't look that up right now. Try rephrasing your question.",
+    cacheable: false,
+  };
+}
+
+async function cacheStoreNode(state) {
+  if (state.fromCache || !state.cacheable) return {};
+  await storeCachedAnswer({
+    question: state.question,
+    answer: state.answer,
+    sqlUsed: state.sqlUsed,
+    rows: state.rows,
+  });
+  return {};
 }
 
 // ---- Edges (the routing logic) ----------------------------------------
+
+function afterCacheLookup(state) {
+  return state.fromCache ? "finalize" : "generate";
+}
 
 function afterGenerate(state) {
   return !state.needsSql || !state.sql ? "finalize" : "validate";
@@ -104,19 +138,23 @@ function afterHeal(state) {
 // ---- Build and compile the graph --------------------------------------
 
 const graph = new StateGraph(StateAnnotation)
+  .addNode("cacheLookup", cacheLookupNode)
   .addNode("generate", generateNode)
   .addNode("validate", validateNode)
   .addNode("execute", executeNode)
   .addNode("heal", healNode)
   .addNode("summarize", summarizeNode)
   .addNode("finalize", finalizeNode)
-  .addEdge(START, "generate")
+  .addNode("cacheStore", cacheStoreNode)
+  .addEdge(START, "cacheLookup")
+  .addConditionalEdges("cacheLookup", afterCacheLookup, ["generate", "finalize"])
   .addConditionalEdges("generate", afterGenerate, ["validate", "finalize"])
   .addConditionalEdges("validate", afterValidate, ["execute", "heal", "finalize"])
   .addConditionalEdges("execute", afterExecute, ["summarize", "heal", "finalize"])
   .addConditionalEdges("heal", afterHeal, ["validate", "finalize"])
   .addEdge("summarize", "finalize")
-  .addEdge("finalize", END)
+  .addEdge("finalize", "cacheStore")
+  .addEdge("cacheStore", END)
   .compile();
 
 export async function answerQuestion(question, history = []) {

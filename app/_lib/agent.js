@@ -3,6 +3,14 @@ import { SCHEMA_DESCRIPTION } from "./schema";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const EMBEDDING_MODEL = process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-001";
+
+// Kept small on purpose: 768 dims is enough for a similarity cache over a
+// single small store's worth of questions, keeps the pgvector index cheap,
+// and matches text-embedding-004's native size for familiarity. Gemini's
+// embedding models support requesting a smaller-than-native output via
+// outputDimensionality.
+export const EMBEDDING_DIMENSIONS = 768;
 
 const SQL_SYSTEM_PROMPT = `You are the product-catalog assistant for an e-commerce storefront called Saamjh Store.
 You ONLY answer visitor questions about this store: its products, categories, prices, stock,
@@ -79,6 +87,17 @@ Produce a corrected SELECT query following the same rules.`;
     },
   });
   return JSON.parse(response.text);
+}
+
+// Turns a question into a vector for the semantic cache (Phase 4). Same
+// Gemini API key/billing as everything else here — no new provider needed.
+export async function embedText(text) {
+  const response = await ai.models.embedContent({
+    model: EMBEDDING_MODEL,
+    contents: [text],
+    config: { outputDimensionality: EMBEDDING_DIMENSIONS },
+  });
+  return response.embeddings[0].values;
 }
 
 export async function summarize(question, rows) {

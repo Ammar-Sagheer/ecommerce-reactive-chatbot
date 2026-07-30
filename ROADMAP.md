@@ -38,7 +38,8 @@ context.
 
 - [x] Natural-language-to-SQL chat (generate, validate, execute) — Phase 1, verified working
 - [x] Self-healing SQL (auto-retry on query error, up to N attempts) — Phase 2, code complete
-- [ ] Semantic cache (embedding similarity — paraphrased questions hit the same cached answer)
+- [x] Semantic cache (embedding similarity — paraphrased questions hit the same cached answer) —
+  Phase 4, code complete
 - [ ] Auto few-shot learning (successful queries get stored and reused as prompt examples)
 - [ ] RAG fallback (answer knowledge questions that don't need a database query)
 - [ ] Chart auto-detection from result rows (bar/line)
@@ -55,7 +56,7 @@ context.
 | Orchestration | LangGraph | `@langchain/langgraph` (v1.4.8) | Direct JS port exists from the same team — same concepts apply. Used in Phase 3 (`app/_lib/graph.js`): `StateGraph` + `Annotation.Root` for state, `.addNode`/`.addEdge`/`.addConditionalEdges` for the graph shape. |
 | LLM calls | OpenAI Python SDK | `@google/genai` npm package (Gemini) | Reusing the same Gemini API key already set up for `reactive-google-ai-agent` — no new billing account needed. (Claude API was considered but requires separate console.anthropic.com billing beyond the Claude Pro subscription — deferred.) |
 | DB access | SQLAlchemy (async) + asyncpg | `pg` (node-postgres) | Decided in Phase 1 — Gemini generates raw SQL strings at runtime, so a bare driver matches better than an ORM query-builder. Bonus: `pg` doesn't use server-side prepared statements by default, so unlike `asyncpg` we don't need the `statement_cache_size=0` PgBouncer workaround. |
-| Vector search (semantic cache, few-shot, RAG) | FAISS | TBD — options: Postgres `pgvector` extension, or a Node vector lib | Decided per-phase, not up front |
+| Vector search (semantic cache, few-shot, RAG) | FAISS | Postgres `pgvector` extension | Decided in Phase 4 — see below. Reused for few-shot (Phase 5) and RAG (Phase 6) if a similar approach fits. |
 | Session memory | Redis | `ioredis` or `redis` npm client | Same tool, just the JS client |
 | Voice STT | OpenAI Whisper API | `openai` npm package (same API) | |
 | Voice TTS | gTTS | TBD — no exact equivalent, will evaluate options in that phase | |
@@ -89,8 +90,16 @@ phases are usable/demoable on their own, not just scaffolding.
   "validate" and "execute" could become two separate, real graph nodes instead of one combined
   step. `route.js` now imports `answerQuestion` from `graph.js` instead of `agent.js` — its public
   shape (`{answer, sqlUsed, rows}`) is unchanged, so nothing else needed to change.
-- **Phase 4 — Semantic cache**: embedding-based similarity cache so paraphrased questions reuse
-  answers
+- **Phase 4 — Semantic cache** ✅ code complete: embedding-based similarity cache so paraphrased
+  questions reuse answers instead of re-running the full Gemini + SQL pipeline. New
+  `app/_lib/cache.js` (`findSimilarCached`/`storeCachedAnswer`), a new `embedText()` in
+  `app/_lib/agent.js` (Gemini's `gemini-embedding-001`, 768 dims), and a new `semantic_cache` table
+  (pgvector) in the `saam-s-store` Supabase project. Two new graph nodes wrap the existing Phase 3
+  graph: `cacheLookup` (right after `START`; on a hit >= similarity threshold, routes straight to
+  `finalize` with the cached answer) and `cacheStore` (right before `END`; writes back any
+  freshly-computed *cacheable* answer). "Cacheable" excludes the two hardcoded pipeline-failure
+  fallback strings (guard rejection / unrecoverable query error) so a temporary failure doesn't get
+  permanently cached — everything else (real data answers, greetings, graceful refusals) is cached.
 - **Phase 5 — Auto few-shot learning**: store successful query examples, inject top-K similar
   ones into future prompts
 - **Phase 6 — RAG fallback**: answer non-SQL knowledge questions from a document source
@@ -104,16 +113,49 @@ phases are usable/demoable on their own, not just scaffolding.
 
 ## Current Status
 
-**Last updated:** 2026-07-28
+**Last updated:** 2026-07-30
 
-**Where we are:** ✅ **Phases 1, 2, and 3 all done.** Phase 1 built the Next.js scaffold,
-`app/_lib/schema.js` (schema description for the LLM), `app/_lib/sqlGuard.js` (SELECT-only
-validator), `app/_lib/db.js` (`pg` pool via the Supabase pooler), `app/api/chat/route.js`, and a
-minimal test page at `/`. Phase 2 added self-healing (fixed SQL failures by feeding the error back
-to Gemini). Phase 3 replaced the linear code with an explicit LangGraph.js `StateGraph` in the new
-`app/_lib/graph.js` — six nodes (`generate`/`validate`/`execute`/`heal`/`summarize`/`finalize`)
+**Where we are:** ✅ **Phases 1-3 done and verified; Phase 4 (semantic cache) code complete,
+verification pending** (same network limitation as always — see below). Phase 1 built the Next.js
+scaffold, `app/_lib/schema.js` (schema description for the LLM), `app/_lib/sqlGuard.js`
+(SELECT-only validator), `app/_lib/db.js` (`pg` pool via the Supabase pooler), `app/api/chat/route.js`,
+and a minimal test page at `/`. Phase 2 added self-healing (fixed SQL failures by feeding the error
+back to Gemini). Phase 3 replaced the linear code with an explicit LangGraph.js `StateGraph` in the
+new `app/_lib/graph.js` — six nodes (`generate`/`validate`/`execute`/`heal`/`summarize`/`finalize`)
 connected by conditional edges. `app/_lib/agent.js` now holds only the three pure Gemini-calling
 functions; the graph owns all control flow.
+
+Phase 4 added a semantic cache in front of that graph:
+- **New Supabase migration** (`sgyxlcjqlcbwudekpgfz`, the `saam-s-store`/`Saamj-Strore-Clone`
+  project): `create extension vector` (moved to the `extensions` schema, matching this project's
+  existing extension placement, to keep the security advisor clean), a new `semantic_cache` table
+  (`question`, `embedding vector(768)`, `answer`, `sql_used`, `rows jsonb`, `hit_count`,
+  `created_at`, `last_hit_at`), an `hnsw`/`vector_cosine_ops` index, RLS enabled with a policy
+  scoped to the `chatbot_readonly` role only (not Supabase's `anon`/`authenticated`), and
+  `GRANT SELECT, INSERT, UPDATE` to `chatbot_readonly` (the LLM still can't reach this table even if
+  something went wrong with the grant — `sqlGuard.js`'s `ALLOWED_TABLES` allowlist only contains
+  `products`/`categories`/`product_images`, so generated SQL referencing `semantic_cache` would be
+  rejected regardless).
+- **`app/_lib/agent.js`**: new `embedText()` using `ai.models.embedContent()` with
+  `GEMINI_EMBEDDING_MODEL` (default `gemini-embedding-001`) and `outputDimensionality: 768`.
+- **`app/_lib/db.js`**: new `query(sql, params)` — a parameterized-query escape hatch for our own
+  internal tables, deliberately bypassing `validateSelectOnly`/`ALLOWED_TABLES` (those guards exist
+  to sandbox untrusted Gemini-generated SQL, not our own hand-written statements).
+- **`app/_lib/cache.js`** (new): `findSimilarCached(question)` embeds the question, runs a
+  pgvector `<=>` (cosine distance) nearest-neighbor query, and returns the cached
+  `{answer, sqlUsed, rows}` if similarity is above `SEMANTIC_CACHE_THRESHOLD` (default `0.92`), else
+  `null`. `storeCachedAnswer(...)` embeds + inserts a new row. Both are wrapped in try/catch so a
+  cache-layer failure (network hiccup, bad embedding) degrades to "just run the full pipeline"
+  rather than breaking the user-facing answer.
+- **`app/_lib/graph.js`**: two new nodes wrap the Phase 3 graph without touching its internals —
+  `cacheLookup` right after `START` (routes to `finalize` on a hit, `generate` on a miss) and
+  `cacheStore` right before `END` (writes back the answer if it's fresh, non-cache-hit, and
+  "cacheable"). `finalizeNode` now also decides `cacheable`: `true` for real data answers and for
+  greeting/off-topic-refusal direct answers (deterministic per question), `false` for the two
+  hardcoded pipeline-failure fallback strings (guard rejection, unrecoverable query error) — so a
+  transient failure never gets permanently cached as the answer to a legitimate question.
+- **New env vars** (`.env.example`): `GEMINI_EMBEDDING_MODEL` (default `gemini-embedding-001`) and
+  `SEMANTIC_CACHE_THRESHOLD` (default `0.92`).
 
 **Verified — Phase 1:**
 - Gemini-only path (greetings / off-topic refusal) — tested via `curl`.
@@ -172,8 +214,31 @@ all); "list products sorted by weight" finally worked. Traced from the logs:
    graceful `directAnswer` — arguably better than Phase 2's original behavior, which discarded a
    graceful heal-step answer in favor of always showing a generic hardcoded fallback message.
 
-**Next step:** Start Phase 4 — semantic cache (embedding-based similarity, so paraphrased questions
-reuse a cached answer instead of re-querying).
+**Verified — Phase 4:** ⏳ not yet verified end to end — code complete and reviewed, `npm run build`
+and `eslint` both pass, and the `semantic_cache` table/index/grants were applied directly to the
+`saam-s-store` Supabase project and confirmed present. Actual round-trip testing (does a paraphrase
+really hit the cache, does a genuinely different question miss it, does `hit_count` increment) needs
+Ammar's machine, same as Phases 1-3 — this build container can reach Supabase's HTTPS
+management API (used above to apply the migration) but not the Postgres pooler's port 6543 that the
+running app itself connects through.
+
+**Next step:** Verify Phase 4 on Ammar's machine (ask something, ask a paraphrase, confirm the
+second call is fast and doesn't re-invoke Gemini's SQL-generation step — e.g. add a temporary
+console.log in `cacheLookupNode`/`cacheStoreNode`, or check `hit_count`/`last_hit_at` in
+`semantic_cache` via the Supabase dashboard). Then start Phase 5 — auto few-shot learning (store
+successful query examples, inject top-K similar ones into future prompts) — can likely reuse the
+same pgvector approach and `app/_lib/cache.js`-style pattern, just against a different table storing
+`{question, sql}` pairs instead of `{question, answer}`.
 
 **Open decisions not yet made:**
 - None blocking — Postgres client (`pg`) was decided and used in Phase 1 (see Tech Mapping table).
+  Vector search backend (`pgvector`) was decided in Phase 4 (see Tech Mapping table).
+
+**Known limitation carried into Phase 4:** the semantic cache keys off the bare question text only,
+not the conversation `history` sent alongside it. A context-dependent follow-up ("what about a
+cheaper one?") could theoretically hit a cached answer meant for an unrelated earlier conversation
+that happened to phrase things similarly. This isn't fixed here — proper conversation-aware caching
+overlaps with Phase 7 (session memory), which doesn't exist yet either. Acceptable for now since the
+current UI already resends the whole `history` array on every call and Gemini's own SQL-generation
+step also only gets a truncated last-6-turns window (see `historyToContents` in `agent.js`); revisit
+once Phase 7 lands.

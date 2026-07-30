@@ -26,6 +26,19 @@ export async function executeQuery(sql, limitRows = 20) {
   }
 }
 
+// Parameterized query helper for our own internal tables (e.g. the semantic
+// cache) — never used for LLM-generated SQL, so it deliberately bypasses
+// validateSelectOnly/ALLOWED_TABLES. Those guards exist to sandbox untrusted
+// Gemini output, not our own hand-written statements.
+export async function query(sql, params = []) {
+  const client = await getPool().connect();
+  try {
+    return await client.query(sql, params);
+  } finally {
+    client.release();
+  }
+}
+
 // Convenience wrapper (validate + execute in one call) — used by anything
 // that doesn't need the two steps to be separate graph nodes.
 export async function runSelect(sql, limitRows = 20) {
