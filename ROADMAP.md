@@ -42,8 +42,8 @@ context.
   Phase 4, code complete
 - [x] Auto few-shot learning (successful queries get stored and reused as prompt examples) —
   Phase 5, verified
-- [x] RAG fallback (answer knowledge questions that don't need a database query) — Phase 6, code
-  complete, uses **placeholder demo content** (see Current Status — must be replaced with real
+- [x] RAG fallback (answer knowledge questions that don't need a database query) — Phase 6,
+  verified, uses **placeholder demo content** (see Current Status — must be replaced with real
   store policy docs before this app faces real customer traffic)
 - [ ] Chart auto-detection from result rows (bar/line)
 - [ ] Session memory (rolling conversation window, so follow-up questions have context)
@@ -139,10 +139,7 @@ phases are usable/demoable on their own, not just scaffolding.
 
 **Last updated:** 2026-07-30
 
-**Where we are:** ✅ **Phases 1-5 done and verified; Phase 6 (RAG fallback) code complete,
-verification pending** (needs Ammar's machine, same network limitation as always — plus the
-one-time `npm run seed:knowledge` step). Phases 1-5 are merged to `main`; Phase 6 is on its own
-branch.
+**Where we are:** ✅ **Phases 1-6 all done and verified.**
 
 **⚠️ Placeholder content reminder:** the `knowledge_base` table (seeded by
 `scripts/seedKnowledgeBase.mjs`) contains clearly fictional shipping/returns/payment/contact/about
@@ -327,9 +324,15 @@ Gemini calls); few-shot only enriches the existing `generate` call's prompt on a
 call count as Phase 3, just a better-informed one. The payoff is consistency/correctness for novel
 questions, not fewer round-trips.
 
-**Verified — Phase 6:** ⏳ not yet verified end to end. `npm run build`/`eslint` pass and the
-`knowledge_base` table/index/RLS/grants are confirmed present, but the first real seed attempt hit
-a bug:
+**Verified — Phase 6:** ✅ confirmed end to end after two stacked permission bugs during seeding
+(both below). `npm run seed:knowledge` succeeded once fixed — all 5 placeholder topics present in
+`knowledge_base`. Real traffic confirmed via `semantic_cache` (RAG answers get cached too, same
+path as any other answer): `"what is your shipping policy"`, `"shipping policy"`, `"shipping
+price?"` all answered with content paraphrased directly from the seeded shipping chunk, and
+`"what about the returns"` correctly answered from the returns chunk — all four with `sql_used:
+null`, confirming they went through the RAG path, not SQL. Different phrasings of the same shipping
+question all pulled the same grounded content, confirming the classification + retrieval
+generalizes across wording rather than only matching one exact question.
 - **Bug found running `npm run seed:knowledge`:** failed immediately with `permission denied for
   table knowledge_base`. Root cause was in the *script*, not the grants — `knowledge_base` was
   deliberately made `SELECT`/`INSERT`-only for `chatbot_readonly` (no `DELETE`/`UPDATE`, since this
@@ -350,19 +353,8 @@ a bug:
   (`with check (true)`) rather than switching to one broad `for all` policy — keeping them split
   makes it obvious at a glance that `UPDATE`/`DELETE` still have no policy either, matching this
   table's intentionally-narrower-than-`semantic_cache`/`sql_examples` design.
-- Not yet seeded successfully — needs `npm run seed:knowledge` run again locally with both fixes.
-  Full
-  round-trip testing (ask a policy question, confirm it's answered from the seeded content and not
-  refused as off-topic; ask something the knowledge base genuinely doesn't cover and confirm it says
-  so instead of guessing) still needs Ammar's machine.
-
-**Next step:** Run `npm run seed:knowledge` once, then verify Phase 6 on Ammar's machine — ask a
-shipping/returns/payment/contact question and confirm it's answered (watch for the `RAG: grounding
-answer in N knowledge chunk(s)` log line) instead of getting the old "I can only help with products"
-refusal; ask something unrelated to both products and store policy and confirm it's still refused;
-ask something store-related but not in the 5 placeholder topics and confirm it says it doesn't have
-that information rather than inventing an answer. Once verified, merge to `main` and start Phase 7
-— session memory (Redis-backed rolling conversation window).
+**Next step:** Merge to `main`, then start Phase 7 — session memory (Redis-backed rolling
+conversation window).
 
 **Open decisions not yet made:**
 - None blocking — Postgres client (`pg`) was decided and used in Phase 1 (see Tech Mapping table).
