@@ -68,10 +68,22 @@ async function main() {
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
   try {
-    // This script fully owns the table's (small, static) content, so
-    // re-running it after an edit is just "delete everything, reinsert" —
-    // safe because nothing else ever writes to knowledge_base.
-    await pool.query("delete from knowledge_base");
+    // chatbot_readonly is deliberately SELECT/INSERT-only on this table (no
+    // DELETE/UPDATE — knowledge_base isn't meant to be mutable at request
+    // time), so this script can't clear-and-reinsert on its own. Guard
+    // against accidental duplicate rows instead: bail out if it looks like
+    // seeding already happened, and point at the manual fix.
+    const { rows: existing } = await pool.query("select count(*)::int as count from knowledge_base");
+    if (existing[0].count > 0) {
+      console.log(
+        `knowledge_base already has ${existing[0].count} row(s). Re-running this script would ` +
+        `create duplicates since it can only INSERT, not DELETE. If you want to reseed (e.g. after ` +
+        `editing PLACEHOLDER_CHUNKS), clear the table first via the Supabase SQL editor ` +
+        `("delete from knowledge_base;", using your admin/postgres connection, not chatbot_readonly), ` +
+        `then run this script again.`
+      );
+      return;
+    }
 
     for (const chunk of PLACEHOLDER_CHUNKS) {
       const response = await ai.models.embedContent({

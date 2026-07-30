@@ -327,13 +327,23 @@ Gemini calls); few-shot only enriches the existing `generate` call's prompt on a
 call count as Phase 3, just a better-informed one. The payoff is consistency/correctness for novel
 questions, not fewer round-trips.
 
-**Verified — Phase 6:** ⏳ not yet verified end to end — code complete, `npm run build` and
-`eslint` both pass, `knowledge_base` table/index/RLS/grants applied and confirmed present. Not yet
-seeded (needs `npm run seed:knowledge` run locally with a real `GEMINI_API_KEY`/`DATABASE_URL`,
-since this build container can't reach the Postgres pooler). Actual round-trip testing (ask a
-policy question, confirm it's answered from the seeded content and not refused as off-topic; ask
-something the knowledge base genuinely doesn't cover and confirm it says so instead of guessing)
-needs Ammar's machine.
+**Verified — Phase 6:** ⏳ not yet verified end to end. `npm run build`/`eslint` pass and the
+`knowledge_base` table/index/RLS/grants are confirmed present, but the first real seed attempt hit
+a bug:
+- **Bug found running `npm run seed:knowledge`:** failed immediately with `permission denied for
+  table knowledge_base`. Root cause was in the *script*, not the grants — `knowledge_base` was
+  deliberately made `SELECT`/`INSERT`-only for `chatbot_readonly` (no `DELETE`/`UPDATE`, since this
+  table isn't meant to be mutable at request time), but the seed script opened with `delete from
+  knowledge_base` to make re-runs idempotent, which that role was never granted. Confirmed via
+  `has_table_privilege('chatbot_readonly','public.knowledge_base','DELETE')` returning `false`.
+  Rather than widen the runtime role's grants just for script convenience, fixed the script instead:
+  removed the `DELETE`, and added a row-count guard that bails out with instructions (clear the
+  table manually via the Supabase SQL editor using an admin connection, then re-run) if
+  `knowledge_base` already has rows, so accidental re-runs can't silently create duplicates.
+- Not yet seeded successfully — needs `npm run seed:knowledge` run again locally with the fix. Full
+  round-trip testing (ask a policy question, confirm it's answered from the seeded content and not
+  refused as off-topic; ask something the knowledge base genuinely doesn't cover and confirm it says
+  so instead of guessing) still needs Ammar's machine.
 
 **Next step:** Run `npm run seed:knowledge` once, then verify Phase 6 on Ammar's machine — ask a
 shipping/returns/payment/contact question and confirm it's answered (watch for the `RAG: grounding
