@@ -38,6 +38,11 @@ async function cacheLookupNode(state) {
 
 async function generateNode(state) {
   const examples = await findSimilarExamples(state.question);
+  console.log(
+    examples.length > 0
+      ? `Few-shot: pulled ${examples.length} example(s) into the prompt for: ${state.question}`
+      : `Few-shot: no similar examples found for: ${state.question}`
+  );
   const decision = await generateSqlDecision(state.question, state.history, examples);
   return {
     needsSql: decision.needsSql,
