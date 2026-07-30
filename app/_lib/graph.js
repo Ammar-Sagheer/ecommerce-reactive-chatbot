@@ -3,6 +3,7 @@ import { generateSqlDecision, healSql, summarize } from "./agent";
 import { validateSelectOnly, UnsafeQueryError } from "./sqlGuard";
 import { executeQuery } from "./db";
 import { findSimilarCached, storeCachedAnswer } from "./cache";
+import { findSimilarExamples, storeExample } from "./fewshot";
 
 // The shape of the state every node reads from and writes back to.
 // Each Annotation() field defaults to "last write wins" — a node returning
@@ -36,7 +37,8 @@ async function cacheLookupNode(state) {
 }
 
 async function generateNode(state) {
-  const decision = await generateSqlDecision(state.question, state.history);
+  const examples = await findSimilarExamples(state.question);
+  const decision = await generateSqlDecision(state.question, state.history, examples);
   return {
     needsSql: decision.needsSql,
     sql: decision.sql,
@@ -58,6 +60,11 @@ async function validateNode(state) {
 async function executeNode(state) {
   try {
     const rows = await executeQuery(state.sql);
+    // Fire-and-forget: this SQL just proved it runs against the real schema,
+    // regardless of whether the heal loop was needed to get here, so it's
+    // worth remembering for future similar questions. storeExample() never
+    // throws, so this can't fail the request.
+    storeExample({ question: state.question, sql: state.sql });
     return { rows, error: null };
   } catch (err) {
     console.error("Query execution failed:", err, "| sql:", state.sql);

@@ -49,7 +49,28 @@ function historyToContents(history) {
   }));
 }
 
-export async function generateSqlDecision(question, history) {
+// Phase 5 — few-shot learning. Appends real (question, sql) pairs that
+// worked before, pulled from `sql_examples` by similarity, as concrete
+// precedent for this store's schema quirks. With no examples yet (empty
+// table, or nothing similar enough), this is a no-op and generation behaves
+// exactly like Phase 4.
+function buildSqlSystemPrompt(examples) {
+  if (!examples || examples.length === 0) return SQL_SYSTEM_PROMPT;
+
+  const examplesBlock = examples
+    .map((ex) => `Question: ${ex.question}\nSQL: ${ex.sql}`)
+    .join("\n\n");
+
+  return `${SQL_SYSTEM_PROMPT}
+
+Here are some real questions and the SQL that correctly answered them in the past. Use them as a
+guide for this store's schema and query style, but always write a fresh query tailored to the
+current question rather than reusing one verbatim:
+
+${examplesBlock}`;
+}
+
+export async function generateSqlDecision(question, history, examples = []) {
   const contents = [
     ...historyToContents(history),
     { role: "user", parts: [{ text: question }] },
@@ -58,7 +79,7 @@ export async function generateSqlDecision(question, history) {
     model: MODEL,
     contents,
     config: {
-      systemInstruction: SQL_SYSTEM_PROMPT,
+      systemInstruction: buildSqlSystemPrompt(examples),
       responseMimeType: "application/json",
       responseSchema: SQL_DECISION_SCHEMA,
       temperature: 0,

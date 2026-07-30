@@ -90,7 +90,7 @@ phases are usable/demoable on their own, not just scaffolding.
   "validate" and "execute" could become two separate, real graph nodes instead of one combined
   step. `route.js` now imports `answerQuestion` from `graph.js` instead of `agent.js` — its public
   shape (`{answer, sqlUsed, rows}`) is unchanged, so nothing else needed to change.
-- **Phase 4 — Semantic cache** ✅ code complete: embedding-based similarity cache so paraphrased
+- **Phase 4 — Semantic cache** ✅ done: embedding-based similarity cache so paraphrased
   questions reuse answers instead of re-running the full Gemini + SQL pipeline. New
   `app/_lib/cache.js` (`findSimilarCached`/`storeCachedAnswer`), a new `embedText()` in
   `app/_lib/agent.js` (Gemini's `gemini-embedding-001`, 768 dims), and a new `semantic_cache` table
@@ -100,8 +100,18 @@ phases are usable/demoable on their own, not just scaffolding.
   freshly-computed *cacheable* answer). "Cacheable" excludes the two hardcoded pipeline-failure
   fallback strings (guard rejection / unrecoverable query error) so a temporary failure doesn't get
   permanently cached — everything else (real data answers, greetings, graceful refusals) is cached.
-- **Phase 5 — Auto few-shot learning**: store successful query examples, inject top-K similar
-  ones into future prompts
+- **Phase 5 — Auto few-shot learning** ✅ code complete: every SQL query that actually executes
+  without error gets stored as a `(question, sql)` example; future questions pull the top-K most
+  similar past examples (via the same pgvector approach as Phase 4) and hand them to Gemini as
+  concrete precedent before it generates new SQL. Unlike the semantic cache, this never
+  short-circuits the pipeline — Gemini still runs every time, just with richer context. New
+  `app/_lib/fewshot.js` (`findSimilarExamples`/`storeExample`) and a new `sql_examples` table
+  (pgvector) in the same Supabase project. `generateNode` in `graph.js` now fetches examples before
+  calling `generateSqlDecision`; `executeNode` fire-and-forget-stores the SQL the moment it runs
+  successfully (covers both a fresh `generate` success and a post-`heal` success, since both flow
+  through the same `executeNode`). `agent.js`'s `generateSqlDecision` gained an `examples` parameter
+  and a `buildSqlSystemPrompt()` helper that appends them to the system instruction only when
+  present — with an empty `sql_examples` table, behavior is identical to Phase 4.
 - **Phase 6 — RAG fallback**: answer non-SQL knowledge questions from a document source
 - **Phase 7 — Session memory**: Redis-backed rolling conversation window
 - **Phase 8 — Chart generation**: auto-detect chart type from result rows
@@ -115,7 +125,9 @@ phases are usable/demoable on their own, not just scaffolding.
 
 **Last updated:** 2026-07-30
 
-**Where we are:** ✅ **Phases 1-4 all done and verified.** Phase 1 built the Next.js
+**Where we are:** ✅ **Phases 1-4 done and verified; Phase 5 (auto few-shot learning) code
+complete, verification pending** (needs Ammar's machine, same network limitation as always). Merged
+to `main` through Phase 4; Phase 5 is on its own branch. Phase 1 built the Next.js
 scaffold, `app/_lib/schema.js` (schema description for the LLM), `app/_lib/sqlGuard.js`
 (SELECT-only validator), `app/_lib/db.js` (`pg` pool via the Supabase pooler), `app/api/chat/route.js`,
 and a minimal test page at `/`. Phase 2 added self-healing (fixed SQL failures by feeding the error
@@ -177,6 +189,34 @@ Phase 4 added a semantic cache in front of that graph:
   transient failure never gets permanently cached as the answer to a legitimate question.
 - **New env vars** (`.env.example`): `GEMINI_EMBEDDING_MODEL` (default `gemini-embedding-001`) and
   `SEMANTIC_CACHE_THRESHOLD` (default `0.92`).
+
+Phase 5 added auto few-shot learning on top of the (now-merged) Phase 4 pipeline:
+- **New Supabase migration**: a `sql_examples` table (`question`, `sql`, `embedding vector(768)`,
+  `created_at`, `use_count`), same `hnsw`/`vector_cosine_ops` index and `chatbot_readonly`-scoped RLS
+  policy pattern as `semantic_cache`. This time the role-level fix from Phase 4 (`GRANT USAGE ON
+  SCHEMA extensions` + `search_path`) already covers it — confirmed via `has_table_privilege`/
+  `has_schema_privilege` before writing any app code, instead of finding a permission gap the hard
+  way again.
+- **`app/_lib/fewshot.js`** (new): `findSimilarExamples(question)` returns up to `FEWSHOT_TOP_K`
+  (default 3) examples with similarity ≥ `FEWSHOT_MIN_SIMILARITY` (default 0.5 — deliberately looser
+  than the semantic cache's 0.92, since an example only needs to be a reasonable style/structure
+  guide, not a near-duplicate). `storeExample({question, sql})` embeds + inserts. Same
+  fail-degrades-gracefully try/catch pattern as `cache.js`.
+- **`app/_lib/agent.js`**: `generateSqlDecision` gained a third `examples` parameter; new
+  `buildSqlSystemPrompt(examples)` appends a "here's real SQL that worked before" block to the
+  system instruction only when examples exist, so an empty `sql_examples` table means identical
+  behavior to Phase 4.
+- **`app/_lib/graph.js`**: `generateNode` now calls `findSimilarExamples` before
+  `generateSqlDecision`. `executeNode` fire-and-forget-calls `storeExample` the moment a query
+  executes without error — this naturally captures both a clean first-try success and a
+  post-`heal` success, since both paths run through the same `executeNode`. No new nodes/edges
+  needed (unlike Phase 4's cache, few-shot retrieval doesn't change the graph's routing — it only
+  enriches what `generate` sends to Gemini).
+- **New env vars**: `FEWSHOT_TOP_K` (default `3`), `FEWSHOT_MIN_SIMILARITY` (default `0.5`).
+- **Synergy with Phase 4 worth noting:** the semantic cache runs *before* `generate` and
+  short-circuits on a hit, so only genuinely novel-enough questions ever reach `executeNode` and get
+  stored as few-shot examples — no separate dedup logic needed to stop the examples table from
+  filling up with near-identical rows.
 
 **Verified — Phase 1:**
 - Gemini-only path (greetings / off-topic refusal) — tested via `curl`.
@@ -246,12 +286,20 @@ threshold isn't so loose that unrelated questions falsely share answers. Termina
 expected `Semantic cache miss...`/`Semantic cache hit...` lines, no `type "vector" does not exist"`
 errors after the fixes.
 
-**Next step:** Start Phase 5 — auto few-shot learning (store successful query examples, inject
-top-K similar ones into future prompts). Can likely reuse the same pgvector approach and
-`app/_lib/cache.js`-style pattern established in Phase 4, just against a different table storing
-`{question, sql}` pairs instead of `{question, answer}` — and this time remember to grant both
-`USAGE` on the `extensions` schema *and* set `chatbot_readonly`'s `search_path` up front, instead of
-finding it the hard way again.
+**Verified — Phase 5:** ⏳ not yet verified end to end — code complete, `npm run build` and
+`eslint` both pass, `sql_examples` table/index/RLS/grants applied and confirmed present in the
+Supabase project, and the role already had the right `extensions` schema access from the Phase 4
+fix (confirmed before writing app code this time, not after). Actual round-trip testing (ask a
+question, confirm it's stored in `sql_examples`, ask a *related-but-not-paraphrased* question and
+confirm the example gets pulled into the prompt and `use_count` increments) needs Ammar's machine,
+same network limitation as every other phase.
+
+**Next step:** Verify Phase 5 on Ammar's machine — ask a product question, check `sql_examples` for
+a new row; ask a different-but-related question (not a close-enough paraphrase to hit the Phase 4
+cache) and confirm via `use_count`/`last_hit_at`-style bookkeeping (there's no `last_used_at` column
+yet, only `use_count` — add one if that turns out to matter) that the earlier example got pulled in.
+Once verified, merge to `main` and start Phase 6 — RAG fallback (answer non-SQL knowledge questions
+from a document source).
 
 **Open decisions not yet made:**
 - None blocking — Postgres client (`pg`) was decided and used in Phase 1 (see Tech Mapping table).
