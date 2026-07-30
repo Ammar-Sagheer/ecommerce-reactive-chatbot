@@ -340,7 +340,18 @@ a bug:
   removed the `DELETE`, and added a row-count guard that bails out with instructions (clear the
   table manually via the Supabase SQL editor using an admin connection, then re-run) if
   `knowledge_base` already has rows, so accidental re-runs can't silently create duplicates.
-- Not yet seeded successfully — needs `npm run seed:knowledge` run again locally with the fix. Full
+- **Second bug, same seed attempt, next line of the script:** the `INSERT` itself then failed with
+  `new row violates row-level security policy for table "knowledge_base"`. This one really was a
+  migration gap, not the grants — the original migration `GRANT`ed `chatbot_readonly` table-level
+  `INSERT`, but only wrote an RLS *policy* for `SELECT`. RLS enforces per-command: a table-level
+  grant doesn't help if there's no matching policy for that specific command, so every `INSERT` was
+  being default-denied by RLS regardless of the grant. Confirmed via `pg_policies` showing only one
+  `SELECT`-command policy existed. Fixed with an additional, separate `INSERT`-command policy
+  (`with check (true)`) rather than switching to one broad `for all` policy — keeping them split
+  makes it obvious at a glance that `UPDATE`/`DELETE` still have no policy either, matching this
+  table's intentionally-narrower-than-`semantic_cache`/`sql_examples` design.
+- Not yet seeded successfully — needs `npm run seed:knowledge` run again locally with both fixes.
+  Full
   round-trip testing (ask a policy question, confirm it's answered from the seeded content and not
   refused as off-topic; ask something the knowledge base genuinely doesn't cover and confirm it says
   so instead of guessing) still needs Ammar's machine.
