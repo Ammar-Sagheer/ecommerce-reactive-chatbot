@@ -136,6 +136,19 @@ Phase 4 added a semantic cache in front of that graph:
   something went wrong with the grant — `sqlGuard.js`'s `ALLOWED_TABLES` allowlist only contains
   `products`/`categories`/`product_images`, so generated SQL referencing `semantic_cache` would be
   rejected regardless).
+  - **Bug found during Ammar's first local test:** asked two questions, `semantic_cache` stayed
+    completely empty. Root cause: moving the `vector` extension to the `extensions` schema (to
+    clear the earlier advisory) only moved the extension's objects there — it didn't grant
+    `chatbot_readonly` permission to actually use that schema. Without `USAGE` on `extensions`,
+    Postgres can't resolve the unqualified `vector` type or `<=>` operator for that role even though
+    `extensions` is on its search_path, so every cache read/write in `cache.js` was throwing,
+    getting caught by its own try/catch, logged as a `console.warn`, and silently degrading to "run
+    the full pipeline" — which is exactly why the chatbot still worked, just never touched the
+    cache. Fixed with one more migration: `grant usage on schema extensions to chatbot_readonly;`.
+    Confirmed via `has_schema_privilege('chatbot_readonly','extensions','USAGE')` flipping
+    `false → true`. Added a `console.log` in `cacheLookupNode` ("Semantic cache hit"/"miss") so this
+    class of failure is visible in the terminal going forward instead of only a warning buried in
+    the logs.
 - **`app/_lib/agent.js`**: new `embedText()` using `ai.models.embedContent()` with
   `GEMINI_EMBEDDING_MODEL` (default `gemini-embedding-001`) and `outputDimensionality: 768`.
 - **`app/_lib/db.js`**: new `query(sql, params)` — a parameterized-query escape hatch for our own

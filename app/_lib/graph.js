@@ -27,7 +27,11 @@ const StateAnnotation = Annotation.Root({
 
 async function cacheLookupNode(state) {
   const cached = await findSimilarCached(state.question);
-  if (!cached) return { fromCache: false };
+  if (!cached) {
+    console.log("Semantic cache miss, running full pipeline:", state.question);
+    return { fromCache: false };
+  }
+  console.log("Semantic cache hit:", state.question);
   return { ...cached, fromCache: true };
 }
 
