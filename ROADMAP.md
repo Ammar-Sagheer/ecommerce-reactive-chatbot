@@ -393,9 +393,30 @@ test on Ammar's machine, which immediately surfaced a genuine bug:
   `still_fresh: false` under the new filter. This doesn't delete old rows (harmless, just ignored
   once stale) — table growth from that is an accepted minor tradeoff, not worth a cleanup job yet.
 
+- **Second, more serious bug found immediately after the TTL fix: cache collapse across unrelated
+  follow-ups.** Asked three different follow-up questions in one conversation ("what about a cheaper
+  one?", "what about a less cheaper option?", "what is the most expensive product?") and got the
+  **exact same cached answer** (the Baby Nail Kit) for all three — confirmed directly against
+  `semantic_cache`: that one row's `hit_count` had reached 10, served for questions that clearly
+  weren't asking about it. Root cause was Phase 7's own context-blindness fix
+  (`buildContextualQuery`, folding recent turns into what gets embedded): consecutive follow-ups in
+  the same conversation share almost all of their recent-history text, so that *shared prefix*
+  dominated the similarity score and swamped the one line that actually differed — two genuinely
+  different follow-ups collapsed onto the same cached row purely because they followed similar prior
+  turns. Realized the original design reasoning was wrong: a context-dependent follow-up's correct
+  answer is inherently unique to its own conversation ("cheaper than *what*?"), so it was never a
+  good caching candidate to begin with — trying to make the cache *context-aware* was the wrong fix
+  for the Phase 4 concern. **Reverted and replaced** with a simpler rule in `cache.js`: skip the
+  cache entirely (both lookup and storage) whenever there's real conversation history, only cache
+  genuinely standalone questions. This still fully resolves the original Phase 4 concern (a follow-up
+  that's never cached can't wrongly match anything) without the new collapse failure mode.
+  `buildContextualQuery`/`VECTOR_CONTEXT_MESSAGES` remain in use for RAG retrieval (`rag.js`) only —
+  that one compares a contextualized query against *static* knowledge chunks with no conversational
+  content of their own, so there's no row-to-row shared-prefix collision risk there.
+
 Still to verify: the actual context-aware follow-up behavior (does "what about a cheaper one?"
-produce a coherent answer using conversation history) and session persistence across a page refresh,
-now that the stale-cache noise is out of the way.
+produce a coherent answer using conversation history, now correctly via `generateSqlDecision`
+receiving real history rather than via the cache) and session persistence across a page refresh.
 
 **Next step:** Verify Phase 7 on Ammar's machine (needs an Upstash `REDIS_URL` first), then merge to
 `main` and start Phase 8 — chart generation (auto-detect chart type from result rows).
