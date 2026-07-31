@@ -29,7 +29,7 @@ const StateAnnotation = Annotation.Root({
 // A node is just a function: (state) => partial state update.
 
 async function cacheLookupNode(state) {
-  const cached = await findSimilarCached(state.question);
+  const cached = await findSimilarCached(state.question, state.history);
   if (!cached) {
     console.log("Semantic cache miss, running full pipeline:", state.question);
     return { fromCache: false };
@@ -93,7 +93,7 @@ async function healNode(state) {
 }
 
 async function ragNode(state) {
-  const chunks = await findRelevantChunks(state.question);
+  const chunks = await findRelevantChunks(state.question, state.history);
   console.log(
     chunks.length > 0
       ? `RAG: grounding answer in ${chunks.length} knowledge chunk(s) for: ${state.question}`
@@ -135,6 +135,7 @@ async function cacheStoreNode(state) {
   if (state.fromCache || !state.cacheable) return {};
   await storeCachedAnswer({
     question: state.question,
+    history: state.history,
     answer: state.answer,
     sqlUsed: state.sqlUsed,
     rows: state.rows,

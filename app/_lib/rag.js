@@ -1,5 +1,6 @@
 import { embedText } from "./agent";
 import { query } from "./db";
+import { toVectorLiteral, buildContextualQuery } from "./vectorUtils";
 
 // Phase 6 — RAG fallback. Retrieves the most relevant chunks of store
 // knowledge (shipping/returns/payment/contact/etc.) for a question, so
@@ -9,18 +10,20 @@ import { query } from "./db";
 const TOP_K = Number(process.env.RAG_TOP_K) || 3;
 const MIN_SIMILARITY = Number(process.env.RAG_MIN_SIMILARITY) || 0.5;
 
-function toVectorLiteral(embedding) {
-  return `[${embedding.join(",")}]`;
-}
+// Phase 7 — same reasoning as the semantic cache: a bare follow-up like
+// "what about exchanges instead?" doesn't mention "return" or "policy" on
+// its own, so retrieval needs the preceding turns folded in to find the
+// right chunk at all.
+const CONTEXT_MESSAGES = Number(process.env.VECTOR_CONTEXT_MESSAGES) || 4;
 
 // Returns up to TOP_K { topic, content } chunks similar enough to be worth
 // grounding an answer in, or [] if the table is empty, nothing clears the
 // similarity floor, or the lookup fails — a broken knowledge base should
 // degrade to "I don't have that information" (handled by
 // answerFromKnowledge on an empty array), never break the request.
-export async function findRelevantChunks(question) {
+export async function findRelevantChunks(question, history = []) {
   try {
-    const embedding = await embedText(question);
+    const embedding = await embedText(buildContextualQuery(question, history, CONTEXT_MESSAGES));
     const vectorLiteral = toVectorLiteral(embedding);
     const result = await query(
       `select topic, content, 1 - (embedding <=> $1::vector) as similarity

@@ -14,17 +14,18 @@ export default function Home() {
     const question = input.trim();
     if (!question || loading) return;
 
-    const history = messages;
-    const nextMessages = [...history, { role: "user", content: question }];
+    const nextMessages = [...messages, { role: "user", content: question }];
     setMessages(nextMessages);
     setInput("");
     setLoading(true);
 
     try {
+      // No history sent here — the server keeps its own rolling window in
+      // Redis, keyed by a session cookie the browser sends automatically.
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: question, history }),
+        body: JSON.stringify({ message: question }),
       });
       const data = await res.json();
       const answer = res.ok ? data.answer : `Error: ${data.error || "request failed"}`;

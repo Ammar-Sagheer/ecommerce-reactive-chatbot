@@ -1,5 +1,6 @@
 import { embedText } from "./agent";
 import { query } from "./db";
+import { toVectorLiteral } from "./vectorUtils";
 
 // Phase 5 — auto few-shot learning. Every time a generated SQL query
 // actually runs successfully, we store the (question, sql) pair. On future
@@ -10,15 +11,17 @@ import { query } from "./db";
 // this table stores *how to query*, not *the final answer*, so it doesn't
 // short-circuit the pipeline the way a cache hit does — Gemini still runs,
 // just with better context.
+//
+// Deliberately NOT made conversation-context-aware like the Phase 7 update
+// to cache.js/rag.js: generateSqlDecision() already receives the real
+// conversation history directly and resolves follow-up references itself
+// when writing the query. This lookup's only job is "find SQL with a
+// similar *structure*", which doesn't depend on what preceded the question.
 const TOP_K = Number(process.env.FEWSHOT_TOP_K) || 3;
 // Lower than the semantic cache's threshold on purpose: an example only
 // needs to be a reasonably relevant style/structure guide, not a
 // near-duplicate of the current question.
 const MIN_SIMILARITY = Number(process.env.FEWSHOT_MIN_SIMILARITY) || 0.5;
-
-function toVectorLiteral(embedding) {
-  return `[${embedding.join(",")}]`;
-}
 
 // Returns up to TOP_K { question, sql } examples similar enough to be
 // useful, or [] if the table is empty, nothing clears the similarity floor,

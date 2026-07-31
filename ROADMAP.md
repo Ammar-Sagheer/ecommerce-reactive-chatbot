@@ -46,7 +46,8 @@ context.
   verified, uses **placeholder demo content** (see Current Status — must be replaced with real
   store policy docs before this app faces real customer traffic)
 - [ ] Chart auto-detection from result rows (bar/line)
-- [ ] Session memory (rolling conversation window, so follow-up questions have context)
+- [x] Session memory (rolling conversation window, so follow-up questions have context) — Phase 7,
+  code complete
 - [ ] Voice I/O (speech-to-text input, text-to-speech output, streamed)
 - [ ] WebSocket streaming (live token/progress updates instead of waiting for one big response)
 - [ ] Tracing/observability (token counts, latency, cost per request)
@@ -60,7 +61,7 @@ context.
 | LLM calls | OpenAI Python SDK | `@google/genai` npm package (Gemini) | Reusing the same Gemini API key already set up for `reactive-google-ai-agent` — no new billing account needed. (Claude API was considered but requires separate console.anthropic.com billing beyond the Claude Pro subscription — deferred.) |
 | DB access | SQLAlchemy (async) + asyncpg | `pg` (node-postgres) | Decided in Phase 1 — Gemini generates raw SQL strings at runtime, so a bare driver matches better than an ORM query-builder. Bonus: `pg` doesn't use server-side prepared statements by default, so unlike `asyncpg` we don't need the `statement_cache_size=0` PgBouncer workaround. |
 | Vector search (semantic cache, few-shot, RAG) | FAISS | Postgres `pgvector` extension | Decided in Phase 4 — see below. Reused for few-shot (Phase 5) and RAG (Phase 6) if a similar approach fits. |
-| Session memory | Redis | `ioredis` or `redis` npm client | Same tool, just the JS client |
+| Session memory | Redis | `ioredis` npm client, connected to Upstash (hosted, free tier) | Decided in Phase 7 — see below |
 | Voice STT | OpenAI Whisper API | `openai` npm package (same API) | |
 | Voice TTS | gTTS | TBD — no exact equivalent, will evaluate options in that phase | |
 | Tracing | LangFuse Python SDK | `langfuse` npm package | Official JS SDK exists |
@@ -127,7 +128,25 @@ phases are usable/demoable on their own, not just scaffolding.
   routing after `generate`/`heal` alongside `validate`. **Uses placeholder demo content** (see
   Current Status) — seeded via a new standalone script, `scripts/seedKnowledgeBase.mjs`, run once
   locally.
-- **Phase 7 — Session memory**: Redis-backed rolling conversation window
+- **Phase 7 — Session memory** ✅ code complete: server-side rolling conversation window in Redis
+  (Upstash), replacing trust in whatever `history` the client resends. `app/api/chat/route.js` now
+  reads/creates an httpOnly session cookie (`chat_session_id`, 30-day browser lifetime), pulls that
+  session's recent history from the new `app/_lib/sessionMemory.js` (`getSessionHistory`/
+  `appendToSessionHistory`, an `ioredis` list per session with a 30-minute inactivity TTL that
+  Redis expires on its own — no cleanup job needed), and appends both the new question and the
+  answer after each turn. `app/page.js` no longer sends `history` in the request body at all.
+  `graph.js`/`agent.js` are otherwise untouched — `answerQuestion(question, history)`'s interface
+  didn't change, only where `history` comes from did.
+
+  Also fixed the "known limitation" flagged back in Phase 4: the semantic cache (`cache.js`) and RAG
+  retrieval (`rag.js`) now fold the last few turns into what gets embedded (new shared
+  `buildContextualQuery()` in `app/_lib/vectorUtils.js`, alongside a `toVectorLiteral()` extracted
+  from three near-identical copies in `cache.js`/`fewshot.js`/`rag.js`), so a context-dependent
+  follow-up like "what about a cheaper one?" is matched/retrieved based on what it's actually
+  following, not embedded as a bare, ambiguous phrase. `fewshot.js` deliberately did **not** get the
+  same treatment — `generateSqlDecision` already receives full conversation history directly and
+  resolves follow-up references itself when writing SQL, so few-shot examples only need to match on
+  *query structure*, which doesn't depend on what preceded the question.
 - **Phase 8 — Chart generation**: auto-detect chart type from result rows
 - **Phase 9 — WebSocket streaming**: live token-by-token + pipeline-progress updates
 - **Phase 10 — Voice I/O**: speech-to-text input, streamed text-to-speech output
@@ -139,7 +158,10 @@ phases are usable/demoable on their own, not just scaffolding.
 
 **Last updated:** 2026-07-30
 
-**Where we are:** ✅ **Phases 1-6 all done and verified.**
+**Where we are:** ✅ **Phases 1-6 done and verified; Phase 7 (session memory) code complete,
+verification pending** (needs Ammar's machine — this build container can't reach Postgres or Redis
+directly either, plus you'll need a real Upstash `REDIS_URL` in `.env.local`). Phases 1-6 are merged
+to `main`; Phase 7 is on its own branch.
 
 **⚠️ Placeholder content reminder:** the `knowledge_base` table (seeded by
 `scripts/seedKnowledgeBase.mjs`) contains clearly fictional shipping/returns/payment/contact/about
@@ -353,18 +375,25 @@ generalizes across wording rather than only matching one exact question.
   (`with check (true)`) rather than switching to one broad `for all` policy — keeping them split
   makes it obvious at a glance that `UPDATE`/`DELETE` still have no policy either, matching this
   table's intentionally-narrower-than-`semantic_cache`/`sql_examples` design.
-**Next step:** Merge to `main`, then start Phase 7 — session memory (Redis-backed rolling
-conversation window).
+
+**Verified — Phase 7:** ⏳ not yet verified end to end — code complete, `npm run build`/`eslint`
+both pass. Needs: (1) a real Upstash Redis instance (sign up, create a database, copy its `rediss://`
+connection string into `.env.local` as `REDIS_URL`), then (2) an actual conversation test on Ammar's
+machine — ask a question, ask a follow-up that only makes sense with context ("what about a cheaper
+one?"), confirm the second answer is coherent; refresh the page and confirm the conversation
+resumes (same session cookie); optionally wait past `SESSION_TTL_SECONDS` (or lower it temporarily
+for testing) and confirm a new message after that starts a fresh conversation instead of pulling in
+stale context.
+
+**Next step:** Verify Phase 7 on Ammar's machine (needs an Upstash `REDIS_URL` first), then merge to
+`main` and start Phase 8 — chart generation (auto-detect chart type from result rows).
 
 **Open decisions not yet made:**
 - None blocking — Postgres client (`pg`) was decided and used in Phase 1 (see Tech Mapping table).
-  Vector search backend (`pgvector`) was decided in Phase 4 (see Tech Mapping table).
+  Vector search backend (`pgvector`) was decided in Phase 4 (see Tech Mapping table). Session memory
+  backend (`ioredis` + Upstash) was decided in Phase 7 (see Tech Mapping table).
 
-**Known limitation carried into Phase 4:** the semantic cache keys off the bare question text only,
-not the conversation `history` sent alongside it. A context-dependent follow-up ("what about a
-cheaper one?") could theoretically hit a cached answer meant for an unrelated earlier conversation
-that happened to phrase things similarly. This isn't fixed here — proper conversation-aware caching
-overlaps with Phase 7 (session memory), which doesn't exist yet either. Acceptable for now since the
-current UI already resends the whole `history` array on every call and Gemini's own SQL-generation
-step also only gets a truncated last-6-turns window (see `historyToContents` in `agent.js`); revisit
-once Phase 7 lands.
+**Known limitation resolved in Phase 7:** the semantic cache/RAG retrieval used to key off the bare
+question text only, ignoring conversation history — flagged back in Phase 4 as something to revisit
+once real session memory existed. Fixed in `cache.js`/`rag.js` via `buildContextualQuery()` (see
+Phase 7 summary above), so this is no longer an open gap.
