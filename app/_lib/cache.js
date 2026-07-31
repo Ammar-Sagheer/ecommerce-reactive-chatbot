@@ -22,10 +22,21 @@ const SIMILARITY_THRESHOLD = Number(process.env.SEMANTIC_CACHE_THRESHOLD) || 0.9
 // in, it gets fixed here rather than staying a documented limitation.
 const CONTEXT_MESSAGES = Number(process.env.VECTOR_CONTEXT_MESSAGES) || 4;
 
+// How long a cached answer stays eligible to be served before a lookup
+// treats it as if it doesn't exist. Found the hard way during Phase 7
+// testing: a "cheapest product" answer cached on day 1 kept getting served
+// as-is even after a new, cheaper product was added on day 2 — nothing ever
+// told the cache the underlying data had changed. This doesn't delete old
+// rows (they're harmless, just ignored once stale), it just stops a lookup
+// from ever selecting one past this age, so a live store's changing
+// inventory can't get stuck behind a permanently-cached stale answer.
+const TTL_SECONDS = Number(process.env.SEMANTIC_CACHE_TTL_SECONDS) || 3600;
+
 // Returns the cached { answer, sqlUsed, rows } for the closest match above
-// the similarity threshold, or null if there's no good enough match (or the
-// cache itself is unreachable — a cache-layer failure should never break the
-// user-facing answer, so callers get a miss instead of a thrown error).
+// the similarity threshold (and not older than TTL_SECONDS), or null if
+// there's no good-enough fresh match — or the cache itself is unreachable, a
+// cache-layer failure should never break the user-facing answer, so callers
+// get a miss instead of a thrown error.
 export async function findSimilarCached(question, history = []) {
   try {
     const embedding = await embedText(buildContextualQuery(question, history, CONTEXT_MESSAGES));
@@ -33,9 +44,10 @@ export async function findSimilarCached(question, history = []) {
     const result = await query(
       `select id, answer, sql_used, rows, 1 - (embedding <=> $1::vector) as similarity
        from semantic_cache
+       where created_at > now() - make_interval(secs => $2::int)
        order by embedding <=> $1::vector
        limit 1`,
-      [vectorLiteral]
+      [vectorLiteral, TTL_SECONDS]
     );
 
     const best = result.rows[0];

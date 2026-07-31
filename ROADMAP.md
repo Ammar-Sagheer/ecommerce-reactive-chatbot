@@ -376,14 +376,26 @@ generalizes across wording rather than only matching one exact question.
   makes it obvious at a glance that `UPDATE`/`DELETE` still have no policy either, matching this
   table's intentionally-narrower-than-`semantic_cache`/`sql_examples` design.
 
-**Verified — Phase 7:** ⏳ not yet verified end to end — code complete, `npm run build`/`eslint`
-both pass. Needs: (1) a real Upstash Redis instance (sign up, create a database, copy its `rediss://`
-connection string into `.env.local` as `REDIS_URL`), then (2) an actual conversation test on Ammar's
-machine — ask a question, ask a follow-up that only makes sense with context ("what about a cheaper
-one?"), confirm the second answer is coherent; refresh the page and confirm the conversation
-resumes (same session cookie); optionally wait past `SESSION_TTL_SECONDS` (or lower it temporarily
-for testing) and confirm a new message after that starts a fresh conversation instead of pulling in
-stale context.
+**Verified — Phase 7:** ⏳ in progress. Set up an Upstash Redis instance and ran a real conversation
+test on Ammar's machine, which immediately surfaced a genuine bug:
+- **Bug found: stale semantic cache answers.** Asked "what is your cheapest product?" and got
+  "test2 at $99.99" — but a cheaper product ("test", on sale for $90) actually existed. Root cause,
+  confirmed directly against `semantic_cache`: the question matched a **day-old cached answer** from
+  earlier Phase 4 testing (`hit_count` had already reached 6), cached *before* the $90 product
+  existed. `semantic_cache` had no expiration at all — once cached, an answer is served forever
+  regardless of whether the underlying `products` data changes underneath it. Not a Phase 7 bug
+  specifically, but exactly the kind of thing real conversational testing (vs. isolated phase
+  testing) surfaces. Fixed in `cache.js`: `findSimilarCached`'s query now excludes rows older than a
+  new `SEMANTIC_CACHE_TTL_SECONDS` (default 3600 = 1 hour) via
+  `where created_at > now() - make_interval(secs => $2::int)`, so a lookup treats a stale row as if
+  it doesn't exist and falls through to a fresh, live query instead. Verified the SQL directly
+  against the real cache table before shipping it — confirmed the known-stale row flips to
+  `still_fresh: false` under the new filter. This doesn't delete old rows (harmless, just ignored
+  once stale) — table growth from that is an accepted minor tradeoff, not worth a cleanup job yet.
+
+Still to verify: the actual context-aware follow-up behavior (does "what about a cheaper one?"
+produce a coherent answer using conversation history) and session persistence across a page refresh,
+now that the stale-cache noise is out of the way.
 
 **Next step:** Verify Phase 7 on Ammar's machine (needs an Upstash `REDIS_URL` first), then merge to
 `main` and start Phase 8 — chart generation (auto-detect chart type from result rows).
