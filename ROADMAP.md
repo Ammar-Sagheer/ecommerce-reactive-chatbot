@@ -47,7 +47,7 @@ context.
   store policy docs before this app faces real customer traffic)
 - [ ] Chart auto-detection from result rows (bar/line)
 - [x] Session memory (rolling conversation window, so follow-up questions have context) — Phase 7,
-  code complete
+  verified
 - [ ] Voice I/O (speech-to-text input, text-to-speech output, streamed)
 - [ ] WebSocket streaming (live token/progress updates instead of waiting for one big response)
 - [ ] Tracing/observability (token counts, latency, cost per request)
@@ -128,7 +128,7 @@ phases are usable/demoable on their own, not just scaffolding.
   routing after `generate`/`heal` alongside `validate`. **Uses placeholder demo content** (see
   Current Status) — seeded via a new standalone script, `scripts/seedKnowledgeBase.mjs`, run once
   locally.
-- **Phase 7 — Session memory** ✅ code complete: server-side rolling conversation window in Redis
+- **Phase 7 — Session memory** ✅ done: server-side rolling conversation window in Redis
   (Upstash), replacing trust in whatever `history` the client resends. `app/api/chat/route.js` now
   reads/creates an httpOnly session cookie (`chat_session_id`, 30-day browser lifetime), pulls that
   session's recent history from the new `app/_lib/sessionMemory.js` (`getSessionHistory`/
@@ -158,10 +158,7 @@ phases are usable/demoable on their own, not just scaffolding.
 
 **Last updated:** 2026-07-30
 
-**Where we are:** ✅ **Phases 1-6 done and verified; Phase 7 (session memory) code complete,
-verification pending** (needs Ammar's machine — this build container can't reach Postgres or Redis
-directly either, plus you'll need a real Upstash `REDIS_URL` in `.env.local`). Phases 1-6 are merged
-to `main`; Phase 7 is on its own branch.
+**Where we are:** ✅ **Phases 1-7 all done and verified.**
 
 **⚠️ Placeholder content reminder:** the `knowledge_base` table (seeded by
 `scripts/seedKnowledgeBase.mjs`) contains clearly fictional shipping/returns/payment/contact/about
@@ -376,7 +373,7 @@ generalizes across wording rather than only matching one exact question.
   makes it obvious at a glance that `UPDATE`/`DELETE` still have no policy either, matching this
   table's intentionally-narrower-than-`semantic_cache`/`sql_examples` design.
 
-**Verified — Phase 7:** ⏳ in progress. Set up an Upstash Redis instance and ran a real conversation
+**Verified — Phase 7:** ✅ confirmed end to end. Set up an Upstash Redis instance and ran a real conversation
 test on Ammar's machine, which immediately surfaced a genuine bug:
 - **Bug found: stale semantic cache answers.** Asked "what is your cheapest product?" and got
   "test2 at $99.99" — but a cheaper product ("test", on sale for $90) actually existed. Root cause,
@@ -414,12 +411,26 @@ test on Ammar's machine, which immediately surfaced a genuine bug:
   that one compares a contextualized query against *static* knowledge chunks with no conversational
   content of their own, so there's no row-to-row shared-prefix collision risk there.
 
-Still to verify: the actual context-aware follow-up behavior (does "what about a cheaper one?"
-produce a coherent answer using conversation history, now correctly via `generateSqlDecision`
-receiving real history rather than via the cache) and session persistence across a page refresh.
+Both remaining checks passed after the fixes above:
+- **Context-aware follow-ups**: confirmed via `sql_examples` that "one less cheaper than that?"
+  correctly resolved "that" → the $90 test product from the prior turn — `generateSqlDecision`
+  genuinely uses real conversation history, not a guess. (The SQL direction it picked, `< 90` instead
+  of `> 90`, was Gemini misreading the ambiguous phrase "less cheaper" itself, a natural-language
+  ambiguity — the context resolution that matters for Phase 7 worked correctly.)
+- **Session persistence across a refresh**: refreshed the page (visible chat resets to just the
+  greeting — plain React state, never persisted) and asked "what did we just talk about?" — got back
+  a correct summary of the pre-refresh conversation (test2, Neutella Jug, test), proving the
+  `chat_session_id` cookie survived the refresh and Redis still held the real history untouched.
+  This is the clearest possible confirmation that server-side memory, not client-resent history, is
+  what's actually driving context now.
 
-**Next step:** Verify Phase 7 on Ammar's machine (needs an Upstash `REDIS_URL` first), then merge to
-`main` and start Phase 8 — chart generation (auto-detect chart type from result rows).
+**One accepted, non-blocking gap surfaced by that same test**: the *visible* chat transcript doesn't
+rehydrate from Redis on page load — only the underlying conversation *memory* does. Not a bug, just
+a feature nobody asked for yet (an endpoint to fetch and redisplay a session's history on mount).
+Deferred rather than built speculatively; revisit if it turns out to matter in practice.
+
+**Next step:** Merge to `main`, then start Phase 8 — chart generation (auto-detect chart type from
+result rows).
 
 **Open decisions not yet made:**
 - None blocking — Postgres client (`pg`) was decided and used in Phase 1 (see Tech Mapping table).
