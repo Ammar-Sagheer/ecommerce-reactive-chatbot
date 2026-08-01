@@ -244,41 +244,6 @@ phases are usable/demoable on their own, not just scaffolding.
   playback fix touched the input/transcription path. Also still unconfirmed: whether
   `gemini-3.1-flash-tts-preview` specifically is what answered (vs. falling back), since that wasn't
   asked at the time — worth checking server logs if it matters which one is actually in use.
-- **Templating for multiple stores** ✅ done, out of phase sequence — Ammar wants to use this repo
-  as a template for multiple separate store deployments (fork/redeploy per store, not one shared
-  multi-tenant service). Two changes:
-  1. `NEXT_PUBLIC_STORE_NAME` extracted from a hardcoded `"Saamjh Store"` scattered across both
-     Gemini prompts, the chat header, the greeting message, and the browser tab title (which had
-     never actually been customized off the Next.js scaffold default `"Create Next App"`). Spinning
-     up a new store from the template is meant to be "set one env var," not "grep the codebase."
-  2. **`/api/chat` access control** — Ammar wants only approved outside sites able to call a store's
-     API. Real constraint surfaced first: `page.js` runs in the visitor's own browser, so any key
-     embedded there is extractable via dev tools — not a real secret. Landed on the same model
-     Stripe/Google Maps/reCAPTCHA use for browser-embedded keys: `ALLOWED_ORIGINS` (checked against
-     the browser's own `Origin` header — the actual enforcement, since a real browser can't spoof
-     its own origin) plus `CHATBOT_SITE_KEY` (a "public" key the caller's widget sends back in
-     `x-site-key`, raising the bar over either check alone even though neither is airtight against a
-     determined attacker forging both with curl — the stronger fix for that would be a
-     server-to-server proxy on each privileged site's own backend, deliberately not built since
-     Ammar chose the simpler browser-direct model). This deployment's own built-in widget
-     (`page.js`) always calls same-origin and needs none of this — zero config required for the
-     default case, the checks only engage for a genuinely different calling origin. Also fixed the
-     session cookie (`SameSite=Lax` → `None; Secure` for cross-origin calls only) since a
-     cross-origin `fetch()` silently drops a Lax cookie, which would have broken conversation memory
-     for any embedded widget without anyone noticing until a returning visitor's context vanished.
-
-  **Verified live**, not just reviewed: ran the actual Next.js dev server and hit `/api/chat` with
-  curl across every case — same-origin (passes, unaffected), cross-origin from an unlisted origin
-  (403), cross-origin allowlisted but wrong/missing site key (403), cross-origin allowlisted with
-  the correct key (200, streams normally), and both `OPTIONS` preflight cases. The first preflight
-  test caught a real bug before it shipped: `OPTIONS` was checking the site key, but a real CORS
-  preflight never carries a custom header's actual value, only a declaration that the real request
-  will include one — so an allowlisted origin's preflight was wrongly getting rejected too. Fixed by
-  splitting the check: `OPTIONS` only verifies origin (all it can), the real site-key enforcement
-  happens on the actual `POST`. Not yet exercised: an actual second store deployment end-to-end, or
-  a real cross-origin embed from a genuinely different domain (the curl tests simulate the `Origin`
-  header directly, which is the right way to test server-side logic, but haven't confirmed a real
-  browser's fetch() from another site behaves identically).
 - **Phase 11 — Tracing/observability**: request-level tracing (tokens, latency, cost)
 - **Phase 12 — Deployment**: containerize and deploy (host TBD, likely Render again given no
   credit card)
