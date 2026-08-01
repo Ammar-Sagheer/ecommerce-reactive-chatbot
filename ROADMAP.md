@@ -177,7 +177,7 @@ phases are usable/demoable on their own, not just scaffolding.
   a production chart would have (native SVG `<title>` only) since every value is
   already a direct label — an accepted scope reduction that came with choosing
   hand-rolled over a library, not an oversight.
-- **Phase 9 — Streaming** ✅ code complete: live token-by-token answers + pipeline-progress updates,
+- **Phase 9 — Streaming** ✅ done and verified: live token-by-token answers + pipeline-progress updates,
   over Server-Sent Events (not a real WebSocket — see Tech Mapping table for why). `/api/chat` now
   returns a `text/event-stream` instead of one JSON blob. Two real generation calls
   (`summarize()`/`answerFromKnowledge()` in `agent.js`) switched from `generateContent` to
@@ -200,12 +200,7 @@ phases are usable/demoable on their own, not just scaffolding.
 
 **Last updated:** 2026-08-01
 
-**Where we are:** ✅ **Phases 1-8 done and verified; Phase 9 (streaming) code complete, verification
-pending** (needs Ammar's machine — this build container can't reach Postgres/Redis/Gemini to run the
-app live). The two hardest technical pieces — LangGraph's `.stream()`/`config.writer` mechanism and
-the SSE encode/parse round-trip — were verified directly with isolated Node scripts before touching
-the real app, since both were genuinely new, unverified APIs for this project (see Phase 9 summary).
-Phases 1-8 are merged to `main`; Phase 9 is on its own branch.
+**Where we are:** ✅ **Phases 1-9 all done and verified, merged to `main`.**
 
 **⚠️ Placeholder content reminder:** the `knowledge_base` table (seeded by
 `scripts/seedKnowledgeBase.mjs`) contains clearly fictional shipping/returns/payment/contact/about
@@ -529,9 +524,8 @@ Final re-test confirmed all three fixed at once: a clean open line (not a filled
 left-to-right chronological order (Jul 5 → Jul 7 → Jul 9 → Jul 10 → Jul 11), and every point's value
 visible without hovering.
 
-**Verified — Phase 9:** ⏳ not yet verified end to end — code complete, `npm run build`/`eslint`
-both pass. Two things were verified directly with isolated test scripts before writing the real
-integration, since both were genuinely new APIs for this project:
+**Verified — Phase 9:** ✅ verified end to end on Ammar's machine against live Gemini/Postgres/Redis,
+on top of the two isolated pre-integration tests below:
 - **LangGraph's `.stream()` + `config.writer` mechanism**: tested against a real compiled
   `StateGraph` with conditional routing (not just the type definitions). First attempt used the
   package's own exported `writer()` helper — it silently did nothing (no error, no events). Traced
@@ -544,18 +538,23 @@ integration, since both were genuinely new APIs for this project:
   hand-written parser with synthetic edge cases — multiple frames arriving in a single chunk, one
   frame split across two separate reads, and special characters (quotes, unicode) — all round-tripped
   correctly.
+- **Live in the browser**: progress messages appeared ("Querying the database…" etc.) followed by the
+  answer visibly building word-by-word. A chart-worthy question ("show me a price comparison")
+  correctly attached its bar chart once the "done" event landed, confirming the chart/rows path
+  survived the switch from one JSON response to a token stream + separate structured event.
 
-What's *not* yet confirmed: an actual browser session against live Gemini/Postgres/Redis — does the
-UI visibly show progress messages then build up an answer token-by-token, does a chart still attach
-correctly via the final "done" event, does a cache hit (bulk chunk, not real streaming) still feel
-reasonable rather than jarring next to genuinely streamed answers.
+**A real finding along the way, not a Phase 9 bug:** testing surfaced that the Phase 7 semantic
+cache (`cache.js`) only ever fires on the *first* message of a session — `findSimilarCached` and
+`storeCachedAnswer` both unconditionally skip whenever `history.length > 0`, and session history
+(`sessionMemory.js`) stays populated for `SESSION_TTL_SECONDS` (default 1800s) after every message.
+So within any real conversation, turn 2 onward never touches the cache at all, regardless of whether
+that turn is actually context-dependent. Pre-existing behavior from Phase 7, not introduced here —
+left as-is for now since it's out of Phase 9's scope, but flagged as a real limitation worth revisiting:
+the fix would be detecting whether the *current* question is actually context-dependent, rather than
+blanket-skipping caching whenever any history exists.
 
-**Next step:** Verify Phase 9 on Ammar's machine — ask a product question that needs a fresh SQL
-query and confirm progress messages appear ("Querying the database…") followed by the answer
-visibly building word-by-word rather than popping in all at once; ask a repeat question and confirm
-the cache-hit path still works (delivered as one chunk, not streamed, which is expected); confirm a
-chart-worthy question still gets its chart attached once the "done" event lands. Once verified,
-merge to `main` and start Phase 10 — voice I/O (speech-to-text input, streamed text-to-speech output).
+**Next step:** Merged to `main`. Start Phase 10 — voice I/O (speech-to-text input, streamed
+text-to-speech output).
 
 **Open decisions not yet made:**
 - None blocking — Postgres client (`pg`) was decided and used in Phase 1 (see Tech Mapping table).
