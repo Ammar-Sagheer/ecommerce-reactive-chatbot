@@ -16,9 +16,27 @@ const VALUE_GUTTER = 56; // reserved width for the value label, right side
 const CHART_PADDING = 8;
 const MAX_LABEL_CHARS = 16;
 
+// A date-typed column's value survives the server round-trip as a full ISO
+// timestamp string (e.g. "2026-07-11T00:00:00.000Z") — Date objects
+// JSON-serialize that way once they cross the API boundary. Shown raw,
+// that's unreadable on a chart axis, so anything that looks like one gets
+// reformatted into a short, human date first.
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}/;
+
+function formatLabel(label) {
+  if (ISO_DATE_PATTERN.test(label)) {
+    const parsed = new Date(label);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    }
+  }
+  return label;
+}
+
 function truncate(label) {
-  if (label.length <= MAX_LABEL_CHARS) return label;
-  return `${label.slice(0, MAX_LABEL_CHARS - 1)}…`;
+  const formatted = formatLabel(label);
+  if (formatted.length <= MAX_LABEL_CHARS) return formatted;
+  return `${formatted.slice(0, MAX_LABEL_CHARS - 1)}…`;
 }
 
 function formatValue(value) {

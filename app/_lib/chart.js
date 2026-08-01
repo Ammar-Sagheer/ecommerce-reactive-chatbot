@@ -20,11 +20,22 @@ function isNumeric(value) {
   // `typeof value === "number"` alone would silently miss every price,
   // sale_price, and COUNT(*) column.
   if (value === null || value === undefined || value === "") return false;
+  // `timestamp`/`timestamptz` columns come back as native JS Date objects
+  // (the opposite of the numeric case above — pg parses these, doesn't
+  // leave them as strings), and Number(someDate) coerces to its epoch
+  // milliseconds, which is a perfectly finite number. Without this check, a
+  // date column would silently pass as "numeric" and get excluded from ever
+  // being picked as a chart's date axis — found by testing a real
+  // day-grouped query and getting no chart at all for genuinely
+  // chart-worthy data.
+  if (value instanceof Date) return false;
   return Number.isFinite(Number(value));
 }
 
 function isDateLike(value) {
   if (value === null || value === undefined || value === "") return false;
+  // pg's native representation for timestamp/timestamptz columns.
+  if (value instanceof Date) return true;
   // Reject bare numeric strings — Date.parse("2024") or even
   // Date.parse("100") can succeed, and isNumeric() should win that case.
   if (isNumeric(value)) return false;

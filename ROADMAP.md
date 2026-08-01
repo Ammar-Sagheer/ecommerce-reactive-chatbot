@@ -460,20 +460,34 @@ rehydrate from Redis on page load — only the underlying conversation *memory* 
 a feature nobody asked for yet (an endpoint to fetch and redisplay a session's history on mount).
 Deferred rather than built speculatively; revisit if it turns out to matter in practice.
 
-**Verified — Phase 8:** ⏳ not yet verified end to end — code complete, `npm run build`/`eslint`
-both pass, and `detectChart()` was sanity-checked directly (not just assumed) against realistic
-Postgres-shaped rows: price comparisons and `COUNT(*)`-per-category both correctly detected as bar
-charts even with values arriving as strings (`"10.00"`, `"12"`), a date+total shape correctly
-detected as a line chart, and a single-row result / text-only rows / an id-only numeric column all
-correctly returned `null` (no chart). What's *not* yet confirmed: does a chart actually render
-correctly in the browser — bar proportions, label truncation, dark mode, a cache-hit replaying its
-stored chart.
+**Verified — Phase 8:** ⏳ in progress. Bar charts confirmed working in the browser (product price
+comparisons rendered correctly). Testing the line-chart path surfaced a real bug:
+- **Bug found: date-grouped queries never charted, even with genuinely chart-worthy data.** Asked
+  "how many products were added each month?" (correctly got no chart — verified directly against
+  the database that this really was a single row, all 20 products created in the same month, so
+  `null` was the *correct* answer) then asked the context-aware follow-up "and what about each day
+  of july?" — 5 real distinct days, clearly chart-worthy — and got a text-only answer again. Root
+  cause, confirmed by reproducing the exact row shape locally: node-postgres returns
+  `timestamp`/`timestamptz` columns (like `DATE_TRUNC('day', created_at)`) as native JS **`Date`
+  objects**, not strings — the opposite convention from `numeric`/`bigint`, which deliberately stay
+  strings. `isNumeric()`'s `Number(value)` check didn't account for this: `Number(someDate)` coerces
+  a Date to its epoch-milliseconds timestamp, which is a perfectly finite number, so every date
+  column was silently misclassified as `"numeric"` before `isDateLike()` ever got a chance to look at
+  it — leaving `detectChart` with two "numeric" columns and nothing to use as a label, falling
+  through to `null`. Fixed in `chart.js`: both `isNumeric()` and `isDateLike()` now check
+  `value instanceof Date` explicitly up front, rather than relying on `Number()`/`Date.parse()`
+  coercion to sort it out. Re-verified directly against the real failing row shape (5 `Date` objects
+  + string counts) — now correctly returns a line chart spec.
+- **Related fix, same root cause**: a `Date`-typed column's value survives the JSON round-trip to
+  the browser as a full ISO timestamp string (e.g. `"2026-07-11T00:00:00.000Z"`) — unreadable as a
+  raw chart-axis label. Added `formatLabel()` in `Chart.js` to detect an ISO-date-shaped string and
+  reformat it as a short human date (`"Jul 11"`) before truncation, so the line chart's date labels
+  are actually legible instead of a wall of ISO text.
 
-**Next step:** Verify Phase 8 on Ammar's machine — ask a comparison question ("compare the prices of
-your 5 cheapest products") and confirm a bar chart renders below the text answer; ask something
-that returns a single fact and confirm no chart appears; if there's a way to get date-grouped data
-(e.g. products added per month), confirm a line chart renders. Then merge to `main` and start
-Phase 9 — WebSocket streaming (live token-by-token + pipeline-progress updates).
+**Next step:** Re-test the day-grouped follow-up on Ammar's machine to confirm the line chart now
+renders correctly (proportions, date labels, dark mode), then confirm a cache hit replays its stored
+chart correctly. Once verified, merge to `main` and start Phase 9 — WebSocket streaming (live
+token-by-token + pipeline-progress updates).
 
 **Open decisions not yet made:**
 - None blocking — Postgres client (`pg`) was decided and used in Phase 1 (see Tech Mapping table).
