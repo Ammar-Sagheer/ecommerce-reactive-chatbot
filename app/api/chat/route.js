@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { randomUUID } from "crypto";
 import { streamAnswer } from "@/app/_lib/graph";
+import { transcribeAudio, speakText } from "@/app/_lib/agent";
 import { getSessionHistory, appendToSessionHistory } from "@/app/_lib/sessionMemory";
 
 const SESSION_COOKIE = "chat_session_id";
@@ -17,10 +18,13 @@ function sseEvent(data) {
 
 export async function POST(request) {
   const body = await request.json();
-  const { message } = body;
+  // Either a typed `message`, or `audio` (base64) + `audioMimeType` from a
+  // voice recording — never both. `voice: true` additionally asks for the
+  // answer to be spoken back, not just typed back.
+  const { message, audio, audioMimeType, voice } = body;
 
-  if (!message || typeof message !== "string") {
-    return Response.json({ error: "Missing 'message' string." }, { status: 400 });
+  if ((!message || typeof message !== "string") && !audio) {
+    return Response.json({ error: "Missing 'message' string or 'audio' recording." }, { status: 400 });
   }
 
   // Cookies must be set before the streaming response begins — once the
@@ -41,13 +45,25 @@ export async function POST(request) {
   const stream = new ReadableStream({
     async start(controller) {
       try {
+        let question = message;
+
+        if (audio) {
+          question = await transcribeAudio(audio, audioMimeType || "audio/webm");
+          // The client never typed this — it needs the recognized text to
+          // show as the user's own message bubble before anything else.
+          controller.enqueue(encoder.encode(sseEvent({ type: "transcript", text: question })));
+          if (!question) {
+            throw new Error("Couldn't make out anything in that recording.");
+          }
+        }
+
         const history = await getSessionHistory(sessionId);
 
-        const result = await streamAnswer(message, history, (event) => {
+        const result = await streamAnswer(question, history, (event) => {
           controller.enqueue(encoder.encode(sseEvent(event)));
         });
 
-        await appendToSessionHistory(sessionId, "user", message);
+        await appendToSessionHistory(sessionId, "user", question);
         await appendToSessionHistory(sessionId, "assistant", result.answer);
 
         // The answer text itself already streamed as "token" events above —
@@ -59,6 +75,13 @@ export async function POST(request) {
             sseEvent({ type: "done", chart: result.chart, rows: result.rows, sqlUsed: result.sqlUsed })
           )
         );
+
+        if (voice) {
+          await speakText(result.answer, (chunk) => {
+            controller.enqueue(encoder.encode(sseEvent({ type: "audio", ...chunk })));
+          });
+          controller.enqueue(encoder.encode(sseEvent({ type: "audio_done" })));
+        }
       } catch (err) {
         console.error("Streaming chat request failed:", err);
         controller.enqueue(
