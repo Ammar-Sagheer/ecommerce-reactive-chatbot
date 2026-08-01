@@ -49,7 +49,9 @@ context.
 - [x] Session memory (rolling conversation window, so follow-up questions have context) — Phase 7,
   verified
 - [ ] Voice I/O (speech-to-text input, text-to-speech output, streamed)
-- [ ] WebSocket streaming (live token/progress updates instead of waiting for one big response)
+- [x] WebSocket streaming (live token/progress updates instead of waiting for one big response) —
+  Phase 9, code complete. Actually implemented as Server-Sent Events over the existing Route
+  Handler, not a real WebSocket — see Tech Mapping table and Phase 9 summary for why.
 - [ ] Tracing/observability (token counts, latency, cost per request)
 
 ## Tech Mapping — Python original → Node.js/Next.js equivalent
@@ -65,7 +67,7 @@ context.
 | Voice STT | OpenAI Whisper API | `openai` npm package (same API) | |
 | Voice TTS | gTTS | TBD — no exact equivalent, will evaluate options in that phase | |
 | Tracing | LangFuse Python SDK | `langfuse` npm package | Official JS SDK exists |
-| Realtime | FastAPI WebSocket | Next.js + a WebSocket solution (TBD — Next.js API routes don't natively support long-lived WebSocket servers) | Decided in the streaming phase |
+| Realtime | FastAPI WebSocket | Server-Sent Events over the existing Route Handler (`ReadableStream` response) | Decided in Phase 9 — see below. This exact Next.js version's own docs confirmed native support for streaming raw responses from a Route Handler; a real WebSocket server would have needed a custom server process for a bidirectional channel this feature never actually uses (the client never sends anything mid-stream) |
 
 ## Phases
 
@@ -175,7 +177,20 @@ phases are usable/demoable on their own, not just scaffolding.
   a production chart would have (native SVG `<title>` only) since every value is
   already a direct label — an accepted scope reduction that came with choosing
   hand-rolled over a library, not an oversight.
-- **Phase 9 — WebSocket streaming**: live token-by-token + pipeline-progress updates
+- **Phase 9 — Streaming** ✅ code complete: live token-by-token answers + pipeline-progress updates,
+  over Server-Sent Events (not a real WebSocket — see Tech Mapping table for why). `/api/chat` now
+  returns a `text/event-stream` instead of one JSON blob. Two real generation calls
+  (`summarize()`/`answerFromKnowledge()` in `agent.js`) switched from `generateContent` to
+  `generateContentStream`, streaming actual Gemini output token-by-token via an `onToken` callback;
+  every other path (cache hits, greeting/refusal, error fallbacks) sends its already-known text as
+  one bulk chunk, since there's no real generation latency to smooth over there. `graph.js` runs the
+  pipeline via LangGraph's `.stream()` (not `.invoke()`), with nodes calling `config.writer(...)` to
+  emit `{type: "progress"}`/`{type: "token"}` events mid-execution — **not** the package's own
+  exported `writer()` convenience helper, which reads `config.configurable.writer` and doesn't match
+  how this installed version's Pregel loop actually wires things up (confirmed by testing directly,
+  not assumed from the docs — the ambient helper silently no-ops). `page.js` parses the stream by
+  hand via `fetch()` + a manual SSE frame parser, since the browser's built-in `EventSource` only
+  supports `GET` requests and this needs to `POST` the question.
 - **Phase 10 — Voice I/O**: speech-to-text input, streamed text-to-speech output
 - **Phase 11 — Tracing/observability**: request-level tracing (tokens, latency, cost)
 - **Phase 12 — Deployment**: containerize and deploy (host TBD, likely Render again given no
@@ -185,7 +200,12 @@ phases are usable/demoable on their own, not just scaffolding.
 
 **Last updated:** 2026-08-01
 
-**Where we are:** ✅ **Phases 1-8 all done and verified.**
+**Where we are:** ✅ **Phases 1-8 done and verified; Phase 9 (streaming) code complete, verification
+pending** (needs Ammar's machine — this build container can't reach Postgres/Redis/Gemini to run the
+app live). The two hardest technical pieces — LangGraph's `.stream()`/`config.writer` mechanism and
+the SSE encode/parse round-trip — were verified directly with isolated Node scripts before touching
+the real app, since both were genuinely new, unverified APIs for this project (see Phase 9 summary).
+Phases 1-8 are merged to `main`; Phase 9 is on its own branch.
 
 **⚠️ Placeholder content reminder:** the `knowledge_base` table (seeded by
 `scripts/seedKnowledgeBase.mjs`) contains clearly fictional shipping/returns/payment/contact/about
@@ -509,8 +529,33 @@ Final re-test confirmed all three fixed at once: a clean open line (not a filled
 left-to-right chronological order (Jul 5 → Jul 7 → Jul 9 → Jul 10 → Jul 11), and every point's value
 visible without hovering.
 
-**Next step:** Merge to `main`, then start Phase 9 — WebSocket streaming (live token-by-token +
-pipeline-progress updates).
+**Verified — Phase 9:** ⏳ not yet verified end to end — code complete, `npm run build`/`eslint`
+both pass. Two things were verified directly with isolated test scripts before writing the real
+integration, since both were genuinely new APIs for this project:
+- **LangGraph's `.stream()` + `config.writer` mechanism**: tested against a real compiled
+  `StateGraph` with conditional routing (not just the type definitions). First attempt used the
+  package's own exported `writer()` helper — it silently did nothing (no error, no events). Traced
+  the mismatch: `writer()` reads `config.configurable.writer`, but this installed version's Pregel
+  loop actually sets `config.writer` (unnested). Switched nodes to accept `config` as a real second
+  parameter and call `config.writer?.(...)` directly — re-tested against a 3-node conditional graph
+  and confirmed progress/token events arrive in the correct order, interleaved correctly, and the
+  final accumulated state matches what `.invoke()` would have returned.
+- **The SSE encode/parse round-trip**: tested the server's `sseEvent()` framing against the client's
+  hand-written parser with synthetic edge cases — multiple frames arriving in a single chunk, one
+  frame split across two separate reads, and special characters (quotes, unicode) — all round-tripped
+  correctly.
+
+What's *not* yet confirmed: an actual browser session against live Gemini/Postgres/Redis — does the
+UI visibly show progress messages then build up an answer token-by-token, does a chart still attach
+correctly via the final "done" event, does a cache hit (bulk chunk, not real streaming) still feel
+reasonable rather than jarring next to genuinely streamed answers.
+
+**Next step:** Verify Phase 9 on Ammar's machine — ask a product question that needs a fresh SQL
+query and confirm progress messages appear ("Querying the database…") followed by the answer
+visibly building word-by-word rather than popping in all at once; ask a repeat question and confirm
+the cache-hit path still works (delivered as one chunk, not streamed, which is expected); confirm a
+chart-worthy question still gets its chart attached once the "done" event lands. Once verified,
+merge to `main` and start Phase 10 — voice I/O (speech-to-text input, streamed text-to-speech output).
 
 **Open decisions not yet made:**
 - None blocking — Postgres client (`pg`) was decided and used in Phase 1 (see Tech Mapping table).

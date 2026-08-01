@@ -135,9 +135,29 @@ export async function embedText(text) {
 // instruction below is the whole point of RAG: if the retrieved text
 // doesn't actually answer the question, say so instead of guessing —
 // otherwise this would just be a fancier way to hallucinate.
-export async function answerFromKnowledge(question, chunks) {
+// Phase 9 — streams the response instead of waiting for the whole thing.
+// `onToken`, if given, is called with each incremental piece of text as
+// Gemini generates it; the function still returns the full accumulated text
+// either way, so a caller that doesn't care about streaming (or a test)
+// doesn't need to change.
+async function streamGenerateContent(params, onToken) {
+  const stream = await ai.models.generateContentStream(params);
+  let full = "";
+  for await (const chunk of stream) {
+    const piece = chunk.text;
+    if (!piece) continue;
+    full += piece;
+    if (onToken) onToken(piece);
+  }
+  return full.trim();
+}
+
+export async function answerFromKnowledge(question, chunks, onToken) {
   if (!chunks || chunks.length === 0) {
-    return "I don't have that information on hand right now — you may want to reach out to the store directly.";
+    const fallback =
+      "I don't have that information on hand right now — you may want to reach out to the store directly.";
+    if (onToken) onToken(fallback);
+    return fallback;
   }
 
   const context = chunks.map((c) => `[${c.topic}]\n${c.content}`).join("\n\n");
@@ -152,15 +172,17 @@ ${context}
 
 Question: ${question}`;
 
-  const response = await ai.models.generateContent({
-    model: MODEL,
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    config: { temperature: 0.2 },
-  });
-  return response.text.trim();
+  return streamGenerateContent(
+    {
+      model: MODEL,
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      config: { temperature: 0.2 },
+    },
+    onToken
+  );
 }
 
-export async function summarize(question, rows) {
+export async function summarize(question, rows, onToken) {
   const prompt = `You are a friendly storefront assistant. Given the visitor's question and the
 database rows below (JSON), write a concise, natural-language answer. If the rows are empty, say
 the store doesn't have anything matching. Do not mention SQL or tables. If a row represents a
@@ -170,10 +192,12 @@ row's slug field) in the answer text. Never link to an image_url as if it were t
 Question: ${question}
 Rows: ${JSON.stringify(rows)}`;
 
-  const response = await ai.models.generateContent({
-    model: MODEL,
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    config: { temperature: 0.3 },
-  });
-  return response.text.trim();
+  return streamGenerateContent(
+    {
+      model: MODEL,
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      config: { temperature: 0.3 },
+    },
+    onToken
+  );
 }
