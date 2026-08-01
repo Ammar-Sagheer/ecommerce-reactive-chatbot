@@ -482,12 +482,36 @@ comparisons rendered correctly). Testing the line-chart path surfaced a real bug
   the browser as a full ISO timestamp string (e.g. `"2026-07-11T00:00:00.000Z"`) — unreadable as a
   raw chart-axis label. Added `formatLabel()` in `Chart.js` to detect an ISO-date-shaped string and
   reformat it as a short human date (`"Jul 11"`) before truncation, so the line chart's date labels
-  are actually legible instead of a wall of ISO text.
+  are actually legible instead of a wall of ISO text. Applied everywhere a line-chart label is shown
+  — the visible per-point label and the native hover tooltip both go through it.
+
+After that fix landed, the line chart rendered but was genuinely broken in three more ways, all
+caught from one real screenshot:
+- **Filled solid wedge instead of an open line.** Root cause: the line's `<path>` carried both the
+  `chart-mark` and `chart-line` CSS classes, and `.chart-mark { fill: #2a78d6; }` is a real
+  stylesheet rule — which, in SVG, always wins over a `fill="none"` *presentation attribute* written
+  directly on the element (a stylesheet rule beats a bare attribute, full stop). `.chart-line` never
+  set `fill` at all, so `.chart-mark`'s fill was the only rule in effect. Fixed by giving `.chart-line`
+  its own fully self-contained style (`fill: none`, its own `stroke` color) instead of relying on
+  `.chart-mark` for color and hoping the attribute would win — it never would have.
+- **Reversed timeline.** `LineChart` plotted rows in whatever order the SQL returned them, and
+  `GROUP BY ... ORDER BY day DESC` (a very natural way for Gemini to write it) comes back newest-first
+  — so the x-axis silently ran backwards (July 11 on the left, July 5 on the right), with nothing
+  indicating anything was reversed. Fixed by sorting by `new Date(label)` ascending inside
+  `LineChart` itself, before computing any plot positions — the chart is now correct regardless of
+  what order the underlying SQL happened to return.
+- **Only one of five points ever had a visible value.** The original design labeled just the line's
+  endpoint (per the general "don't label every point, it gets chaotic" guideline) — but that
+  guideline is calibrated for dense, multi-week time series, not a 5-point chart in a static chat
+  log, where a hover-only tooltip for 4 of 5 values isn't actually reachable without hovering, and
+  isn't reachable at all on a touch device. Revised: every point on a line chart now gets both a
+  value label above it and a date label below it — a real, considered change from the original plan
+  once real testing showed the general rule didn't fit this specific, small-N use case.
 
 **Next step:** Re-test the day-grouped follow-up on Ammar's machine to confirm the line chart now
-renders correctly (proportions, date labels, dark mode), then confirm a cache hit replays its stored
-chart correctly. Once verified, merge to `main` and start Phase 9 — WebSocket streaming (live
-token-by-token + pipeline-progress updates).
+renders as an actual open line, in the correct chronological order, with every point's value visible
+without hovering. Then confirm a cache hit replays its stored chart correctly. Once verified, merge
+to `main` and start Phase 9 — WebSocket streaming (live token-by-token + pipeline-progress updates).
 
 **Open decisions not yet made:**
 - None blocking — Postgres client (`pg`) was decided and used in Phase 1 (see Tech Mapping table).

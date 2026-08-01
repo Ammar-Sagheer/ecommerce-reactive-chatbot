@@ -118,25 +118,31 @@ function BarChart({ data }) {
 
 function LineChart({ data }) {
   const width = 320;
-  const height = 140;
-  const padTop = 14;
+  const height = 150;
+  const padTop = 20;
   const padBottom = 24;
-  const padSide = 12;
+  const padSide = 18;
   const plotWidth = width - padSide * 2;
   const plotHeight = height - padTop - padBottom;
 
-  const maxValue = Math.max(...data.map((d) => d.value));
-  const minValue = Math.min(0, ...data.map((d) => d.value));
+  // Line charts only ever come from detectChart's date-column path, so every
+  // label here is a real date string — sort chronologically so the chart
+  // reads left-to-right as earlier -> later. A GROUP BY commonly comes back
+  // newest-first (ORDER BY ... DESC), which would otherwise plot a reversed
+  // timeline with no indication anything was backwards.
+  const sorted = [...data].sort((a, b) => new Date(a.label) - new Date(b.label));
+
+  const maxValue = Math.max(...sorted.map((d) => d.value));
+  const minValue = Math.min(0, ...sorted.map((d) => d.value));
   const range = maxValue - minValue || 1;
 
-  const points = data.map((d, i) => ({
+  const points = sorted.map((d, i) => ({
     ...d,
-    x: padSide + (data.length === 1 ? plotWidth / 2 : (i / (data.length - 1)) * plotWidth),
+    x: padSide + (sorted.length === 1 ? plotWidth / 2 : (i / (sorted.length - 1)) * plotWidth),
     y: padTop + plotHeight - ((d.value - minValue) / range) * plotHeight,
   }));
 
   const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
-  const last = points[points.length - 1];
 
   return (
     <svg
@@ -153,23 +159,25 @@ function LineChart({ data }) {
         y2={height - padBottom}
         className="chart-baseline"
       />
-      <path d={linePath} fill="none" className="chart-mark chart-line" />
+      <path d={linePath} className="chart-line" />
       {points.map((p, i) => (
         <g key={i}>
-          <title>{`${p.label}: ${formatValue(p.value)}`}</title>
+          <title>{`${formatLabel(p.label)}: ${formatValue(p.value)}`}</title>
           <circle cx={p.x} cy={p.y} r="6" className="chart-dot-ring" />
           <circle cx={p.x} cy={p.y} r="4" className="chart-dot" />
+          {/* Every point gets its value labeled, not just the endpoint — with
+              the handful of points this chart ever plots, a hover-only
+              tooltip for 4 out of 5 values isn't "reachable without hover"
+              in a static chat log, so the sparse-labeling guideline that
+              fits a dense 90-day chart doesn't fit here. */}
+          <text x={p.x} y={p.y - 10} textAnchor="middle" className="chart-value">
+            {formatValue(p.value)}
+          </text>
+          <text x={p.x} y={height - 8} textAnchor="middle" className="chart-label">
+            {truncate(p.label)}
+          </text>
         </g>
       ))}
-      <text x={last.x} y={last.y - 10} textAnchor="middle" className="chart-value">
-        {formatValue(last.value)}
-      </text>
-      <text x={points[0].x} y={height - 8} textAnchor="start" className="chart-label">
-        {truncate(points[0].label)}
-      </text>
-      <text x={last.x} y={height - 8} textAnchor="end" className="chart-label">
-        {truncate(last.label)}
-      </text>
     </svg>
   );
 }
@@ -187,8 +195,14 @@ export default function Chart({ chart, rows }) {
     <div className="chart-root mt-2">
       <style>{`
         .chart-root { color-scheme: light; }
-        .chart-mark { fill: #2a78d6; stroke: #2a78d6; }
-        .chart-line { stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+        .chart-mark { fill: #2a78d6; }
+        .chart-line {
+          fill: none;
+          stroke: #2a78d6;
+          stroke-width: 2;
+          stroke-linejoin: round;
+          stroke-linecap: round;
+        }
         .chart-dot { fill: #2a78d6; }
         .chart-dot-ring { fill: #fff; }
         .chart-baseline { stroke: rgba(0,0,0,0.18); stroke-width: 1; }
@@ -196,18 +210,21 @@ export default function Chart({ chart, rows }) {
         .chart-value { fill: currentColor; font-size: 10px; font-variant-numeric: tabular-nums; font-family: -apple-system, "Segoe UI", Arial, sans-serif; }
         @media (prefers-color-scheme: dark) {
           .chart-root { color-scheme: dark; }
-          .chart-mark { fill: #3987e5; stroke: #3987e5; }
+          .chart-mark { fill: #3987e5; }
+          .chart-line { stroke: #3987e5; }
           .chart-dot { fill: #3987e5; }
           .chart-dot-ring { fill: #1a1a19; }
           .chart-baseline { stroke: rgba(255,255,255,0.22); }
         }
         :root[data-theme="dark"] .chart-root { color-scheme: dark; }
-        :root[data-theme="dark"] .chart-mark { fill: #3987e5; stroke: #3987e5; }
+        :root[data-theme="dark"] .chart-mark { fill: #3987e5; }
+        :root[data-theme="dark"] .chart-line { stroke: #3987e5; }
         :root[data-theme="dark"] .chart-dot { fill: #3987e5; }
         :root[data-theme="dark"] .chart-dot-ring { fill: #1a1a19; }
         :root[data-theme="dark"] .chart-baseline { stroke: rgba(255,255,255,0.22); }
         :root[data-theme="light"] .chart-root { color-scheme: light; }
-        :root[data-theme="light"] .chart-mark { fill: #2a78d6; stroke: #2a78d6; }
+        :root[data-theme="light"] .chart-mark { fill: #2a78d6; }
+        :root[data-theme="light"] .chart-line { stroke: #2a78d6; }
         :root[data-theme="light"] .chart-dot { fill: #2a78d6; }
         :root[data-theme="light"] .chart-dot-ring { fill: #fff; }
         :root[data-theme="light"] .chart-baseline { stroke: rgba(0,0,0,0.18); }
