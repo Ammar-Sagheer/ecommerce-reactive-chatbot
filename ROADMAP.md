@@ -45,7 +45,7 @@ context.
 - [x] RAG fallback (answer knowledge questions that don't need a database query) — Phase 6,
   verified, uses **placeholder demo content** (see Current Status — must be replaced with real
   store policy docs before this app faces real customer traffic)
-- [x] Chart auto-detection from result rows (bar/line) — Phase 8, code complete
+- [x] Chart auto-detection from result rows (bar/line) — Phase 8, verified
 - [x] Session memory (rolling conversation window, so follow-up questions have context) — Phase 7,
   verified
 - [ ] Voice I/O (speech-to-text input, text-to-speech output, streamed)
@@ -147,7 +147,7 @@ phases are usable/demoable on their own, not just scaffolding.
   same treatment — `generateSqlDecision` already receives full conversation history directly and
   resolves follow-up references itself when writing SQL, so few-shot examples only need to match on
   *query structure*, which doesn't depend on what preceded the question.
-- **Phase 8 — Chart generation** ✅ code complete: detects whether a query's result
+- **Phase 8 — Chart generation** ✅ done: detects whether a query's result
   rows are chart-worthy and, if so, which type — deliberately **rule-based, not another
   Gemini call**: whether rows have a numeric column, a category or date column, and more
   than one row is a mechanical question about data shape, not a judgment call an LLM
@@ -183,13 +183,9 @@ phases are usable/demoable on their own, not just scaffolding.
 
 ## Current Status
 
-**Last updated:** 2026-07-30
+**Last updated:** 2026-08-01
 
-**Where we are:** ✅ **Phases 1-7 done and verified; Phase 8 (chart generation) code complete,
-verification pending** (needs Ammar's machine to actually see a rendered chart in the browser —
-`detectChart()` itself was sanity-checked directly against realistic Postgres-shaped rows, including
-the numeric-as-string case, but nothing here has been visually confirmed in an actual browser yet).
-Phases 1-7 are merged to `main`; Phase 8 is on its own branch.
+**Where we are:** ✅ **Phases 1-8 all done and verified.**
 
 **⚠️ Placeholder content reminder:** the `knowledge_base` table (seeded by
 `scripts/seedKnowledgeBase.mjs`) contains clearly fictional shipping/returns/payment/contact/about
@@ -460,8 +456,9 @@ rehydrate from Redis on page load — only the underlying conversation *memory* 
 a feature nobody asked for yet (an endpoint to fetch and redisplay a session's history on mount).
 Deferred rather than built speculatively; revisit if it turns out to matter in practice.
 
-**Verified — Phase 8:** ⏳ in progress. Bar charts confirmed working in the browser (product price
-comparisons rendered correctly). Testing the line-chart path surfaced a real bug:
+**Verified — Phase 8:** ✅ confirmed end to end. Bar charts confirmed working in the browser (product
+price comparisons rendered correctly). The line-chart path took three real rounds of bugs, all found
+and fixed from actual screenshots rather than assumed fixed after the first patch:
 - **Bug found: date-grouped queries never charted, even with genuinely chart-worthy data.** Asked
   "how many products were added each month?" (correctly got no chart — verified directly against
   the database that this really was a single row, all 20 products created in the same month, so
@@ -508,10 +505,12 @@ caught from one real screenshot:
   value label above it and a date label below it — a real, considered change from the original plan
   once real testing showed the general rule didn't fit this specific, small-N use case.
 
-**Next step:** Re-test the day-grouped follow-up on Ammar's machine to confirm the line chart now
-renders as an actual open line, in the correct chronological order, with every point's value visible
-without hovering. Then confirm a cache hit replays its stored chart correctly. Once verified, merge
-to `main` and start Phase 9 — WebSocket streaming (live token-by-token + pipeline-progress updates).
+Final re-test confirmed all three fixed at once: a clean open line (not a filled wedge), correct
+left-to-right chronological order (Jul 5 → Jul 7 → Jul 9 → Jul 10 → Jul 11), and every point's value
+visible without hovering.
+
+**Next step:** Merge to `main`, then start Phase 9 — WebSocket streaming (live token-by-token +
+pipeline-progress updates).
 
 **Open decisions not yet made:**
 - None blocking — Postgres client (`pg`) was decided and used in Phase 1 (see Tech Mapping table).
