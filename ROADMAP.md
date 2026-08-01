@@ -614,6 +614,14 @@ the Phase 10 summary above. Merged to `main`.
 **Next step:** Start Phase 11 — tracing/observability (request-level tracing for tokens, latency,
 cost).
 
+**Parked, not forgotten:** `claude/saamjh-store-config` branch — store-name templating
+(`NEXT_PUBLIC_STORE_NAME`, extracted from a hardcoded `"Saamjh Store"`) and `/api/chat` access
+control (`ALLOWED_ORIGINS` + `CHATBOT_SITE_KEY`, for calling this from the real Saamjh Store site on
+a different domain). Built, tested live, then deliberately reverted off `main` — Ammar wants this
+kind of store-specific/deployment config kept off the shared template history, on its own branch
+instead. Pick it up whenever ready to actually stand up a second deployment or wire up the real
+saam-s-store frontend; nothing about it depends on Phase 11+ work.
+
 **Open decisions not yet made:**
 - None blocking — Postgres client (`pg`) was decided and used in Phase 1 (see Tech Mapping table).
   Vector search backend (`pgvector`) was decided in Phase 4 (see Tech Mapping table). Session memory
