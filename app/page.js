@@ -3,6 +3,8 @@
 import { useRef, useState } from "react";
 import Chart from "./_components/Chart";
 
+const STORE_NAME = process.env.NEXT_PUBLIC_STORE_NAME || "Saamjh Store";
+
 // Phase 9 — parses a text/event-stream response by hand. The browser's
 // built-in EventSource only supports GET requests with no body, and this
 // needs to POST the question — so this reads the raw stream with fetch()
@@ -42,7 +44,7 @@ function blobToBase64(blob) {
 
 export default function Home() {
   const [messages, setMessages] = useState([
-    { role: "assistant", content: "Hi! Ask me about products in the store." },
+    { role: "assistant", content: `Hi! Ask me about products at ${STORE_NAME}.` },
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -226,7 +228,7 @@ export default function Home() {
     <div className="flex min-h-screen items-center justify-center bg-zinc-50 p-6">
       <div className="flex h-[32rem] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-black/10 bg-white shadow-xl">
         <div className="flex items-center justify-between bg-zinc-900 px-4 py-3 text-white">
-          <span className="font-semibold">ecommerce-reactive-chatbot — Phase 1</span>
+          <span className="font-semibold">{STORE_NAME}</span>
           <button
             type="button"
             onClick={() => {

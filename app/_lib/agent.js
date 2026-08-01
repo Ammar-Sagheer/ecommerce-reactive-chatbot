@@ -4,6 +4,12 @@ import { SCHEMA_DESCRIPTION } from "./schema";
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const EMBEDDING_MODEL = process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-001";
+// NEXT_PUBLIC_ (not server-only) because page.js's header needs this same
+// value client-side — Next.js inlines NEXT_PUBLIC_* vars into the browser
+// bundle at build time, which is fine here since a store's own name isn't a
+// secret. Templating this app for a new store is meant to be "set this one
+// env var," not "go find every hardcoded mention in the code."
+const STORE_NAME = process.env.NEXT_PUBLIC_STORE_NAME || "Saamjh Store";
 // Phase 10 — voice I/O. Both directions stay on Gemini rather than adding a
 // second paid provider (originally the roadmap called for OpenAI Whisper for
 // STT): generateContent/generateContentStream already accept audio as a
@@ -21,7 +27,7 @@ const TTS_VOICE = process.env.GEMINI_TTS_VOICE || "Kore";
 // outputDimensionality.
 export const EMBEDDING_DIMENSIONS = 768;
 
-const SQL_SYSTEM_PROMPT = `You are the assistant for an e-commerce storefront called Saamjh Store.
+const SQL_SYSTEM_PROMPT = `You are the assistant for an e-commerce storefront called ${STORE_NAME}.
 You ONLY answer visitor questions about this store: its products, categories, prices, stock,
 featured items, store policies (shipping, returns, payment, contact info), and simple
 greetings/small talk about the store itself.
@@ -170,7 +176,7 @@ export async function answerFromKnowledge(question, chunks, onToken) {
   }
 
   const context = chunks.map((c) => `[${c.topic}]\n${c.content}`).join("\n\n");
-  const prompt = `You are a friendly assistant for an e-commerce storefront called Saamjh Store.
+  const prompt = `You are a friendly assistant for an e-commerce storefront called ${STORE_NAME}.
 Answer the visitor's question using ONLY the store information below. If that information doesn't
 actually answer the question, say you don't have that information rather than guessing or
 inventing an answer. Answer naturally, as something you just know about the store — do not mention
