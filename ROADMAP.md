@@ -48,8 +48,8 @@ context.
 - [x] Chart auto-detection from result rows (bar/line) — Phase 8, verified
 - [x] Session memory (rolling conversation window, so follow-up questions have context) — Phase 7,
   verified
-- [ ] Voice I/O (speech-to-text input, text-to-speech output, streamed) — Phase 10, code complete,
-  not yet verified live
+- [x] Voice I/O (speech-to-text input, text-to-speech output, streamed) — Phase 10, TTS verified
+  live; STT not separately re-confirmed (see Phase 10 summary)
 - [x] WebSocket streaming (live token/progress updates instead of waiting for one big response) —
   Phase 9, code complete. Actually implemented as Server-Sent Events over the existing Route
   Handler, not a real WebSocket — see Tech Mapping table and Phase 9 summary for why.
@@ -192,8 +192,9 @@ phases are usable/demoable on their own, not just scaffolding.
   not assumed from the docs — the ambient helper silently no-ops). `page.js` parses the stream by
   hand via `fetch()` + a manual SSE frame parser, since the browser's built-in `EventSource` only
   supports `GET` requests and this needs to `POST` the question.
-- **Phase 10 — Voice I/O** 🚧 code complete, not yet verified live: speech-to-text input,
-  streamed text-to-speech output — entirely on Gemini, not OpenAI (see Tech Mapping table for why
+- **Phase 10 — Voice I/O** ✅ done, TTS verified live; STT not explicitly re-confirmed after a fix —
+  see note below: speech-to-text input, streamed text-to-speech output — entirely on Gemini, not
+  OpenAI (see Tech Mapping table for why
   that changed from the original plan). `agent.js` gains `transcribeAudio()` (a normal
   `generateContent` call with the recording as an inline multimodal `Part`, prompted to output only
   the transcription) and `speakText()` (the same `generateContentStream` shape as
@@ -225,11 +226,24 @@ phases are usable/demoable on their own, not just scaffolding.
   Verified: the base64→Int16→Float32 PCM decode math round-trips correctly against synthetic sample
   data (isolated Node test, matching the approach used for Phase 9's SSE framing); model/voice names
   and audio format checked directly against Google's current docs rather than assumed from training
-  data, given how recent this model generation is. **Not yet verified:** an actual microphone
-  recording transcribed correctly, and the exact 3.1 TTS preview model working end-to-end on Ammar's
-  own API key/tier specifically (preview models can have access restrictions docs alone can't confirm).
-  Neither could be tested in this environment — no browser, no microphone, no live Gemini/Postgres/
-  Redis reachable from here.
+  data, given how recent this model generation is.
+
+  **First live test caught a real bug:** text answers worked but no audio played, no error either.
+  Root cause was the `AudioContext` being created lazily inside `playPcmChunk`, several `await`s
+  deep inside the async SSE-reading loop — too far removed from the actual button click for browsers
+  to treat it as a real user gesture, so they silently kept it `"suspended"` and dropped every
+  scheduled sound. Fixed with `unlockAudioContext()`, called synchronously (before any `await`) from
+  every click that can lead to audio — the Send button, the mic button, and the speaker toggle
+  itself — so there's an unbroken chain back to a genuine click by the time playback needs it.
+  Ammar re-tested after the fix and **confirmed TTS playback now works live**.
+
+  **Not separately re-confirmed after that fix:** whether a real microphone recording transcribes
+  accurately via `transcribeAudio()` — Ammar's retest specifically called out voice *output* working;
+  voice *input* accuracy wasn't explicitly checked in the same pass. Worth a quick dedicated check
+  next time voice work resumes, though there's no reason to expect it's broken — nothing about the
+  playback fix touched the input/transcription path. Also still unconfirmed: whether
+  `gemini-3.1-flash-tts-preview` specifically is what answered (vs. falling back), since that wasn't
+  asked at the time — worth checking server logs if it matters which one is actually in use.
 - **Phase 11 — Tracing/observability**: request-level tracing (tokens, latency, cost)
 - **Phase 12 — Deployment**: containerize and deploy (host TBD, likely Render again given no
   credit card)
@@ -238,10 +252,9 @@ phases are usable/demoable on their own, not just scaffolding.
 
 **Last updated:** 2026-08-01
 
-**Where we are:** ✅ **Phases 1-9 done and verified, merged to `main`; Phase 10 (voice I/O) code
-complete, needs a live verification pass on Ammar's machine** (microphone, real Gemini audio I/O,
-and browser playback all need a real browser + real API access this environment doesn't have — see
-the Phase 10 summary for the specific checklist). Phase 10 is on its own branch.
+**Where we are:** ✅ **Phases 1-10 done, merged to `main`.** Phase 10's TTS output is confirmed
+live; STT input wasn't separately re-confirmed after the AudioContext fix (see Phase 10 summary) —
+worth a quick check next time voice work resumes, not currently believed broken.
 
 **⚠️ Placeholder content reminder:** the `knowledge_base` table (seeded by
 `scripts/seedKnowledgeBase.mjs`) contains clearly fictional shipping/returns/payment/contact/about
@@ -594,15 +607,12 @@ left as-is for now since it's out of Phase 9's scope, but flagged as a real limi
 the fix would be detecting whether the *current* question is actually context-dependent, rather than
 blanket-skipping caching whenever any history exists.
 
-**Next step:** Verify Phase 10 on Ammar's machine — record a real question with the mic button and
-confirm the transcript that comes back actually matches what was said; toggle voice replies on and
-confirm the answer is both typed out and spoken back, with audio starting promptly and playing
-without gaps between chunks; confirm a typed (non-voice) question still works exactly as it did in
-Phase 9, unaffected by these changes. If `GEMINI_TTS_MODEL`'s default (`gemini-3.1-flash-tts-preview`
-— a preview model, so access can vary by account/tier even though the name itself is confirmed real)
-isn't available on Ammar's key, fall back to `gemini-2.5-flash-preview-tts`, also confirmed real —
-both are env-overridable without a code change. Once verified, merge to `main` and start Phase 11 —
-tracing/observability (request-level tracing for tokens, latency, cost).
+**Verified — Phase 10:** ✅ TTS output confirmed live by Ammar after the `unlockAudioContext` fix
+(text + spoken answer both working). STT input not separately re-confirmed in that same pass — see
+the Phase 10 summary above. Merged to `main`.
+
+**Next step:** Start Phase 11 — tracing/observability (request-level tracing for tokens, latency,
+cost).
 
 **Open decisions not yet made:**
 - None blocking — Postgres client (`pg`) was decided and used in Phase 1 (see Tech Mapping table).
