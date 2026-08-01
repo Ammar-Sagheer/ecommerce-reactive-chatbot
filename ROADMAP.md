@@ -48,7 +48,8 @@ context.
 - [x] Chart auto-detection from result rows (bar/line) — Phase 8, verified
 - [x] Session memory (rolling conversation window, so follow-up questions have context) — Phase 7,
   verified
-- [ ] Voice I/O (speech-to-text input, text-to-speech output, streamed)
+- [ ] Voice I/O (speech-to-text input, text-to-speech output, streamed) — Phase 10, code complete,
+  not yet verified live
 - [x] WebSocket streaming (live token/progress updates instead of waiting for one big response) —
   Phase 9, code complete. Actually implemented as Server-Sent Events over the existing Route
   Handler, not a real WebSocket — see Tech Mapping table and Phase 9 summary for why.
@@ -64,8 +65,8 @@ context.
 | DB access | SQLAlchemy (async) + asyncpg | `pg` (node-postgres) | Decided in Phase 1 — Gemini generates raw SQL strings at runtime, so a bare driver matches better than an ORM query-builder. Bonus: `pg` doesn't use server-side prepared statements by default, so unlike `asyncpg` we don't need the `statement_cache_size=0` PgBouncer workaround. |
 | Vector search (semantic cache, few-shot, RAG) | FAISS | Postgres `pgvector` extension | Decided in Phase 4 — see below. Reused for few-shot (Phase 5) and RAG (Phase 6) if a similar approach fits. |
 | Session memory | Redis | `ioredis` npm client, connected to Upstash (hosted, free tier) | Decided in Phase 7 — see below |
-| Voice STT | OpenAI Whisper API | `openai` npm package (same API) | |
-| Voice TTS | gTTS | TBD — no exact equivalent, will evaluate options in that phase | |
+| Voice STT | OpenAI Whisper API | Gemini `generateContent` with the audio as an inline multimodal input `Part` | Overridden in Phase 10 — this row originally called for the `openai` package/Whisper, decided before checking whether Gemini itself could do it. It can: the SDK's own README confirms `generateContent`/`generateContentStream` accept audio as a normal multimodal input, same as images. Ammar was already on Gemini's free tier for everything else and didn't want a second paid provider for one feature, so this stays on Gemini instead of adding OpenAI. |
+| Voice TTS | gTTS | Gemini `generateContentStream` with `responseModalities: ["AUDIO"]` + `speechConfig` | Same finding as above — this is the same call already built for streamed text (Phase 9), just requesting audio output instead of text. No new package, no new provider. |
 | Tracing | LangFuse Python SDK | `langfuse` npm package | Official JS SDK exists |
 | Realtime | FastAPI WebSocket | Server-Sent Events over the existing Route Handler (`ReadableStream` response) | Decided in Phase 9 — see below. This exact Next.js version's own docs confirmed native support for streaming raw responses from a Route Handler; a real WebSocket server would have needed a custom server process for a bidirectional channel this feature never actually uses (the client never sends anything mid-stream) |
 
@@ -191,7 +192,30 @@ phases are usable/demoable on their own, not just scaffolding.
   not assumed from the docs — the ambient helper silently no-ops). `page.js` parses the stream by
   hand via `fetch()` + a manual SSE frame parser, since the browser's built-in `EventSource` only
   supports `GET` requests and this needs to `POST` the question.
-- **Phase 10 — Voice I/O**: speech-to-text input, streamed text-to-speech output
+- **Phase 10 — Voice I/O** 🚧 code complete, not yet verified live: speech-to-text input,
+  streamed text-to-speech output — entirely on Gemini, not OpenAI (see Tech Mapping table for why
+  that changed from the original plan). `agent.js` gains `transcribeAudio()` (a normal
+  `generateContent` call with the recording as an inline multimodal `Part`, prompted to output only
+  the transcription) and `speakText()` (the same `generateContentStream` shape as
+  `summarize()`/`answerFromKnowledge()`, just with `responseModalities: ["AUDIO"]` and a
+  `speechConfig` voice — model `gemini-2.5-flash-preview-tts`, voice `"Kore"`, both env-overridable
+  via `GEMINI_TTS_MODEL`/`GEMINI_TTS_VOICE` since neither has been confirmed against the live API
+  yet). `route.js`'s `/api/chat` now accepts `audio` (base64) + `audioMimeType` as an alternative to
+  `message`, transcribes it first and emits a `transcript` SSE event so the UI can show what was
+  heard, then continues through the exact same pipeline as typed text; a `voice: true` flag on the
+  request additionally streams `audio` SSE events (base64 PCM chunks) after the answer's `done`
+  event. `page.js` adds a mic button (`MediaRecorder` → base64 → POST) and a speaker toggle; playback
+  uses a hand-rolled Web Audio API scheduler (`AudioBuffer` built manually from the raw PCM samples,
+  chunks queued back-to-back via `AudioContext.currentTime`) since Gemini's audio output has no file
+  header an `<audio>` tag could just point at — it's raw samples, not a self-contained format.
+  Verified: the base64→Int16→Float32 PCM decode math round-trips correctly against synthetic sample
+  data (isolated Node test, matching the approach used for Phase 9's SSE framing). **Not yet
+  verified:** an actual microphone recording transcribed correctly, the TTS model/voice names being
+  real and accepted by the live API, and what mimeType/sample rate Gemini's audio output actually
+  reports (the decoder parses the rate out of the mimeType rather than assuming 24kHz, specifically
+  so it isn't broken by a wrong guess there — but the guess itself is unconfirmed). None of this
+  could be tested in this environment — no browser, no microphone, no live Gemini/Postgres/Redis
+  reachable from here.
 - **Phase 11 — Tracing/observability**: request-level tracing (tokens, latency, cost)
 - **Phase 12 — Deployment**: containerize and deploy (host TBD, likely Render again given no
   credit card)
@@ -200,7 +224,10 @@ phases are usable/demoable on their own, not just scaffolding.
 
 **Last updated:** 2026-08-01
 
-**Where we are:** ✅ **Phases 1-9 all done and verified, merged to `main`.**
+**Where we are:** ✅ **Phases 1-9 done and verified, merged to `main`; Phase 10 (voice I/O) code
+complete, needs a live verification pass on Ammar's machine** (microphone, real Gemini audio I/O,
+and browser playback all need a real browser + real API access this environment doesn't have — see
+the Phase 10 summary for the specific checklist). Phase 10 is on its own branch.
 
 **⚠️ Placeholder content reminder:** the `knowledge_base` table (seeded by
 `scripts/seedKnowledgeBase.mjs`) contains clearly fictional shipping/returns/payment/contact/about
@@ -553,8 +580,14 @@ left as-is for now since it's out of Phase 9's scope, but flagged as a real limi
 the fix would be detecting whether the *current* question is actually context-dependent, rather than
 blanket-skipping caching whenever any history exists.
 
-**Next step:** Merged to `main`. Start Phase 10 — voice I/O (speech-to-text input, streamed
-text-to-speech output).
+**Next step:** Verify Phase 10 on Ammar's machine — record a real question with the mic button and
+confirm the transcript that comes back actually matches what was said; toggle voice replies on and
+confirm the answer is both typed out and spoken back, with audio starting promptly and playing
+without gaps between chunks; confirm a typed (non-voice) question still works exactly as it did in
+Phase 9, unaffected by these changes. If `GEMINI_TTS_MODEL`/`GEMINI_TTS_VOICE`'s current defaults
+(`gemini-2.5-flash-preview-tts` / `"Kore"`) turn out wrong against the live API, they're
+env-overridable without a code change. Once verified, merge to `main` and start Phase 11 —
+tracing/observability (request-level tracing for tokens, latency, cost).
 
 **Open decisions not yet made:**
 - None blocking — Postgres client (`pg`) was decided and used in Phase 1 (see Tech Mapping table).

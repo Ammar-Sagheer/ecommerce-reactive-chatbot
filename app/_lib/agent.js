@@ -4,6 +4,15 @@ import { SCHEMA_DESCRIPTION } from "./schema";
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const EMBEDDING_MODEL = process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-001";
+// Phase 10 — voice I/O. Both directions stay on Gemini rather than adding a
+// second paid provider (originally the roadmap called for OpenAI Whisper for
+// STT): generateContent/generateContentStream already accept audio as a
+// normal multimodal input Part, and already support requesting AUDIO output
+// via responseModalities/speechConfig — same calls this file already makes,
+// just a different modality. TTS needs its own model name since not every
+// Gemini model can produce audio output.
+const TTS_MODEL = process.env.GEMINI_TTS_MODEL || "gemini-2.5-flash-preview-tts";
+const TTS_VOICE = process.env.GEMINI_TTS_VOICE || "Kore";
 
 // Kept small on purpose: 768 dims is enough for a similarity cache over a
 // single small store's worth of questions, keeps the pgvector index cheap,
@@ -200,4 +209,54 @@ Rows: ${JSON.stringify(rows)}`;
     },
     onToken
   );
+}
+
+// Phase 10 — speech-to-text. Gemini accepts audio as a normal multimodal
+// input Part (inlineData, same shape images/video would use), so this is
+// just a generateContent call with an audio Part instead of only text — no
+// dedicated transcription endpoint or second provider needed. The result
+// feeds straight into the existing text pipeline (graph.js never knows the
+// question originally came from audio).
+export async function transcribeAudio(audioBase64, mimeType) {
+  const response = await ai.models.generateContent({
+    model: MODEL,
+    contents: [
+      {
+        role: "user",
+        parts: [
+          { inlineData: { data: audioBase64, mimeType } },
+          {
+            text: "Transcribe exactly what is said in this audio. Output only the transcription itself — no preamble, no quotation marks, no commentary. If the audio is silent or unintelligible, output nothing.",
+          },
+        ],
+      },
+    ],
+    config: { temperature: 0 },
+  });
+  return (response.text || "").trim();
+}
+
+// Phase 10 — text-to-speech. Same generateContentStream shape as
+// summarize()/answerFromKnowledge() above, just requesting AUDIO output
+// instead of text via responseModalities/speechConfig — this is a normal
+// (non-Live-API) call, so it fits the same request/response + SSE model
+// already built for text in Phase 9. Each streamed chunk's audio is raw PCM
+// (base64), not a self-contained file — `onAudioChunk` gets both the bytes
+// and the chunk's mimeType (which carries the sample rate) so the caller
+// can decode it without guessing the format.
+export async function speakText(text, onAudioChunk) {
+  const stream = await ai.models.generateContentStream({
+    model: TTS_MODEL,
+    contents: [{ role: "user", parts: [{ text }] }],
+    config: {
+      responseModalities: ["AUDIO"],
+      speechConfig: {
+        voiceConfig: { prebuiltVoiceConfig: { voiceName: TTS_VOICE } },
+      },
+    },
+  });
+  for await (const chunk of stream) {
+    const inline = chunk.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+    if (inline?.data) onAudioChunk({ data: inline.data, mimeType: inline.mimeType });
+  }
 }
