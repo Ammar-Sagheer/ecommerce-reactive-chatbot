@@ -70,7 +70,26 @@ export default function Home() {
   // samples by hand into a Web Audio AudioBuffer and schedules it to start
   // exactly when the previous chunk ends, giving gapless playback across
   // chunks that arrived as separate network events.
+  // Browsers only let an AudioContext actually produce sound if it was
+  // created (or resumed) synchronously inside a real user gesture — a click
+  // handler, not something several `await`s deep inside an async stream.
+  // Call this directly from an onClick/onSubmit, before any await, so
+  // there's an unbroken chain back to the click. Playback later, deep
+  // inside the SSE loop, just reuses the already-running context.
+  function unlockAudioContext() {
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      nextPlayTimeRef.current = 0;
+    }
+    if (audioCtxRef.current.state === "suspended") {
+      audioCtxRef.current.resume();
+    }
+  }
+
   function playPcmChunk(base64, mimeType) {
+    // Should already exist and be running by now (unlockAudioContext ran
+    // synchronously in the click handler that kicked off this request) —
+    // this is only a fallback in case that path was somehow skipped.
     if (!audioCtxRef.current) {
       audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
       nextPlayTimeRef.current = 0;
@@ -144,6 +163,7 @@ export default function Home() {
     e.preventDefault();
     const question = input.trim();
     if (!question || loading) return;
+    if (voiceEnabled) unlockAudioContext();
 
     const userIndex = messages.length;
     const assistantIndex = messages.length + 1;
@@ -162,6 +182,7 @@ export default function Home() {
   // real mimeType it reports is sent along with the recording so the server
   // can pass it through to Gemini accurately instead of guessing.
   async function startRecording() {
+    if (voiceEnabled) unlockAudioContext();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
@@ -208,7 +229,10 @@ export default function Home() {
           <span className="font-semibold">ecommerce-reactive-chatbot — Phase 1</span>
           <button
             type="button"
-            onClick={() => setVoiceEnabled((v) => !v)}
+            onClick={() => {
+              unlockAudioContext();
+              setVoiceEnabled((v) => !v);
+            }}
             title={voiceEnabled ? "Voice replies on" : "Voice replies off"}
             className={`rounded-full px-2 py-1 text-xs ${voiceEnabled ? "bg-white text-zinc-900" : "bg-zinc-700 text-zinc-300"}`}
           >
