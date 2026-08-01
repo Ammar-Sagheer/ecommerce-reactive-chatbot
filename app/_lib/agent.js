@@ -11,7 +11,7 @@ const EMBEDDING_MODEL = process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-
 // via responseModalities/speechConfig — same calls this file already makes,
 // just a different modality. TTS needs its own model name since not every
 // Gemini model can produce audio output.
-const TTS_MODEL = process.env.GEMINI_TTS_MODEL || "gemini-2.5-flash-preview-tts";
+const TTS_MODEL = process.env.GEMINI_TTS_MODEL || "gemini-3.1-flash-tts-preview";
 const TTS_VOICE = process.env.GEMINI_TTS_VOICE || "Kore";
 
 // Kept small on purpose: 768 dims is enough for a similarity cache over a

@@ -198,24 +198,38 @@ phases are usable/demoable on their own, not just scaffolding.
   `generateContent` call with the recording as an inline multimodal `Part`, prompted to output only
   the transcription) and `speakText()` (the same `generateContentStream` shape as
   `summarize()`/`answerFromKnowledge()`, just with `responseModalities: ["AUDIO"]` and a
-  `speechConfig` voice — model `gemini-2.5-flash-preview-tts`, voice `"Kore"`, both env-overridable
-  via `GEMINI_TTS_MODEL`/`GEMINI_TTS_VOICE` since neither has been confirmed against the live API
-  yet). `route.js`'s `/api/chat` now accepts `audio` (base64) + `audioMimeType` as an alternative to
-  `message`, transcribes it first and emits a `transcript` SSE event so the UI can show what was
-  heard, then continues through the exact same pipeline as typed text; a `voice: true` flag on the
-  request additionally streams `audio` SSE events (base64 PCM chunks) after the answer's `done`
-  event. `page.js` adds a mic button (`MediaRecorder` → base64 → POST) and a speaker toggle; playback
-  uses a hand-rolled Web Audio API scheduler (`AudioBuffer` built manually from the raw PCM samples,
-  chunks queued back-to-back via `AudioContext.currentTime`) since Gemini's audio output has no file
-  header an `<audio>` tag could just point at — it's raw samples, not a self-contained format.
+  `speechConfig` voice). `route.js`'s `/api/chat` now accepts `audio` (base64) + `audioMimeType` as
+  an alternative to `message`, transcribes it first and emits a `transcript` SSE event so the UI can
+  show what was heard, then continues through the exact same pipeline as typed text; a `voice: true`
+  flag on the request additionally streams `audio` SSE events (base64 PCM chunks) after the answer's
+  `done` event. `page.js` adds a mic button (`MediaRecorder` → base64 → POST) and a speaker toggle;
+  playback uses a hand-rolled Web Audio API scheduler (`AudioBuffer` built manually from the raw PCM
+  samples, chunks queued back-to-back via `AudioContext.currentTime`) since Gemini's audio output has
+  no file header an `<audio>` tag could just point at — it's raw samples, not a self-contained format.
+
+  Ammar is on `gemini-3.5-flash-lite` as the main model, newer than this was first written against —
+  checked Google's own model docs directly rather than assume anything about a generation this
+  recent. Confirmed: every mainline Gemini model, `gemini-3.5-flash-lite` included, accepts audio as
+  input (its modality table lists "Text, Image, Video, Audio, and PDF" for input) even though it can
+  only ever respond in text — so `transcribeAudio()` correctly needs no separate STT model, it just
+  reuses whatever `GEMINI_MODEL` already is. Audio *output* is the opposite: no mainline model can do
+  it, a dedicated TTS model is genuinely required, confirming that part of the original design. No
+  "3.5" TTS variant exists, but a newer-than-2.5 one matching Ammar's generation does —
+  `gemini-3.1-flash-tts-preview` — now the default for `GEMINI_TTS_MODEL`, with
+  `gemini-2.5-flash-preview-tts`/`gemini-2.5-pro-preview-tts` confirmed as real, working older
+  fallbacks if the 3.1 preview isn't available on his account. `"Kore"` confirmed as a real prebuilt
+  voice name (one of 30 listed), and the audio format confirmed as 24kHz/16-bit/mono PCM — matching
+  what the decoder in `page.js` already assumed by default (and it parses the rate out of the
+  response's mimeType rather than hardcoding it, so this isn't fragile even if that ever changes).
+
   Verified: the base64→Int16→Float32 PCM decode math round-trips correctly against synthetic sample
-  data (isolated Node test, matching the approach used for Phase 9's SSE framing). **Not yet
-  verified:** an actual microphone recording transcribed correctly, the TTS model/voice names being
-  real and accepted by the live API, and what mimeType/sample rate Gemini's audio output actually
-  reports (the decoder parses the rate out of the mimeType rather than assuming 24kHz, specifically
-  so it isn't broken by a wrong guess there — but the guess itself is unconfirmed). None of this
-  could be tested in this environment — no browser, no microphone, no live Gemini/Postgres/Redis
-  reachable from here.
+  data (isolated Node test, matching the approach used for Phase 9's SSE framing); model/voice names
+  and audio format checked directly against Google's current docs rather than assumed from training
+  data, given how recent this model generation is. **Not yet verified:** an actual microphone
+  recording transcribed correctly, and the exact 3.1 TTS preview model working end-to-end on Ammar's
+  own API key/tier specifically (preview models can have access restrictions docs alone can't confirm).
+  Neither could be tested in this environment — no browser, no microphone, no live Gemini/Postgres/
+  Redis reachable from here.
 - **Phase 11 — Tracing/observability**: request-level tracing (tokens, latency, cost)
 - **Phase 12 — Deployment**: containerize and deploy (host TBD, likely Render again given no
   credit card)
@@ -584,9 +598,10 @@ blanket-skipping caching whenever any history exists.
 confirm the transcript that comes back actually matches what was said; toggle voice replies on and
 confirm the answer is both typed out and spoken back, with audio starting promptly and playing
 without gaps between chunks; confirm a typed (non-voice) question still works exactly as it did in
-Phase 9, unaffected by these changes. If `GEMINI_TTS_MODEL`/`GEMINI_TTS_VOICE`'s current defaults
-(`gemini-2.5-flash-preview-tts` / `"Kore"`) turn out wrong against the live API, they're
-env-overridable without a code change. Once verified, merge to `main` and start Phase 11 —
+Phase 9, unaffected by these changes. If `GEMINI_TTS_MODEL`'s default (`gemini-3.1-flash-tts-preview`
+— a preview model, so access can vary by account/tier even though the name itself is confirmed real)
+isn't available on Ammar's key, fall back to `gemini-2.5-flash-preview-tts`, also confirmed real —
+both are env-overridable without a code change. Once verified, merge to `main` and start Phase 11 —
 tracing/observability (request-level tracing for tokens, latency, cost).
 
 **Open decisions not yet made:**
