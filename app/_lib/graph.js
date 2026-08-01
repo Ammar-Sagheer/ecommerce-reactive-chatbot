@@ -5,6 +5,7 @@ import { executeQuery } from "./db";
 import { findSimilarCached, storeCachedAnswer } from "./cache";
 import { findSimilarExamples, storeExample } from "./fewshot";
 import { findRelevantChunks } from "./rag";
+import { detectChart } from "./chart";
 
 // The shape of the state every node reads from and writes back to.
 // Each Annotation() field defaults to "last write wins" — a node returning
@@ -23,6 +24,7 @@ const StateAnnotation = Annotation.Root({
   sqlUsed: Annotation(),
   fromCache: Annotation(), // true once cacheLookup found a hit — skip re-storing it
   cacheable: Annotation(), // whether finalize's answer is worth writing to the cache
+  chart: Annotation(), // { type, labelKey, valueKey } if the rows are chart-worthy, else undefined
 });
 
 // ---- Nodes -----------------------------------------------------------
@@ -105,14 +107,22 @@ async function ragNode(state) {
 
 async function summarizeNode(state) {
   const answer = await summarize(state.question, state.rows);
-  return { answer, sqlUsed: state.sql };
+  const chart = detectChart(state.rows);
+  if (chart) console.log(`Chart: detected a ${chart.type} chart (${chart.labelKey}/${chart.valueKey})`);
+  return { answer, sqlUsed: state.sql, chart };
 }
 
 function finalizeNode(state) {
   if (state.answer) {
     // Either a fresh summarize() answer or a cache hit passed straight
     // through — either way it's already a good, deterministic answer.
-    return { answer: state.answer, sqlUsed: state.sqlUsed, rows: state.rows, cacheable: true };
+    return {
+      answer: state.answer,
+      sqlUsed: state.sqlUsed,
+      rows: state.rows,
+      chart: state.chart,
+      cacheable: true,
+    };
   }
   if (!state.needsSql || !state.sql) {
     // Greeting / off-topic refusal — deterministic for a given question, so
@@ -139,6 +149,7 @@ async function cacheStoreNode(state) {
     answer: state.answer,
     sqlUsed: state.sqlUsed,
     rows: state.rows,
+    chart: state.chart,
   });
   return {};
 }
@@ -199,5 +210,5 @@ export async function answerQuestion(question, history = []) {
   const result = await graph.invoke({ question, history, healed: false });
   // Only expose the public shape — result also carries internal fields
   // (error, healed, needsSql, ...) that callers outside this module shouldn't see.
-  return { answer: result.answer, sqlUsed: result.sqlUsed, rows: result.rows };
+  return { answer: result.answer, sqlUsed: result.sqlUsed, rows: result.rows, chart: result.chart };
 }

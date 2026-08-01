@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Chart from "./_components/Chart";
 
 export default function Home() {
   const [messages, setMessages] = useState([
@@ -29,7 +30,10 @@ export default function Home() {
       });
       const data = await res.json();
       const answer = res.ok ? data.answer : `Error: ${data.error || "request failed"}`;
-      setMessages([...nextMessages, { role: "assistant", content: answer }]);
+      setMessages([
+        ...nextMessages,
+        { role: "assistant", content: answer, chart: data.chart, rows: data.rows },
+      ]);
     } catch (err) {
       setMessages([...nextMessages, { role: "assistant", content: `Error: ${err.message}` }]);
     } finally {
@@ -52,6 +56,7 @@ export default function Home() {
               }`}
             >
               {m.content}
+              <Chart chart={m.chart} rows={m.rows} />
             </div>
           ))}
           {loading && (

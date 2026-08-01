@@ -45,7 +45,7 @@ context.
 - [x] RAG fallback (answer knowledge questions that don't need a database query) — Phase 6,
   verified, uses **placeholder demo content** (see Current Status — must be replaced with real
   store policy docs before this app faces real customer traffic)
-- [ ] Chart auto-detection from result rows (bar/line)
+- [x] Chart auto-detection from result rows (bar/line) — Phase 8, code complete
 - [x] Session memory (rolling conversation window, so follow-up questions have context) — Phase 7,
   verified
 - [ ] Voice I/O (speech-to-text input, text-to-speech output, streamed)
@@ -147,7 +147,34 @@ phases are usable/demoable on their own, not just scaffolding.
   same treatment — `generateSqlDecision` already receives full conversation history directly and
   resolves follow-up references itself when writing SQL, so few-shot examples only need to match on
   *query structure*, which doesn't depend on what preceded the question.
-- **Phase 8 — Chart generation**: auto-detect chart type from result rows
+- **Phase 8 — Chart generation** ✅ code complete: detects whether a query's result
+  rows are chart-worthy and, if so, which type — deliberately **rule-based, not another
+  Gemini call**: whether rows have a numeric column, a category or date column, and more
+  than one row is a mechanical question about data shape, not a judgment call an LLM
+  needs to make, and a plain function can't hallucinate a chart type that doesn't fit.
+  New `app/_lib/chart.js` (`detectChart(rows)`) returns `{ type: "bar" | "line", labelKey,
+  valueKey }` or `null`: a date column alongside a numeric one → line (trend); a text
+  column alongside a numeric one → bar (comparison); anything else (a single scalar,
+  no numeric column) → no chart. Handles a real Postgres gotcha: `numeric`/`bigint`
+  columns (price, `COUNT(*)`) come back from `pg` as **strings**, not JS numbers, so
+  "is this numeric" checks `Number.isFinite(Number(v))`, not `typeof v === "number"`.
+  `summarizeNode` in `graph.js` computes the chart alongside the text answer; it flows
+  through `finalizeNode`/`cacheStoreNode` and into the public `answerQuestion()` return
+  shape and the `semantic_cache` table (new nullable `chart` jsonb column) so a cached
+  chart-worthy answer replays with its chart intact.
+
+  Rendering: hand-rolled SVG in a new `app/_components/Chart.js` (Ammar's explicit
+  choice over adding a charting dependency) — followed the project's `dataviz` skill:
+  single series → **sequential one hue** (not categorical; there's only one series),
+  horizontal bars (long product names don't work as rotated vertical-bar labels in a
+  narrow chat bubble), rounded data-ends, a shared baseline, and direct value labels in
+  a permanently-reserved gutter so nothing is ever clipped or needs runtime text
+  measurement. Confirmed mark-vs-surface contrast (blue `#2a78d6` light / `#3987e5`
+  dark against the chat bubble backgrounds) clears the accessibility floor: 4.02:1 /
+  4.79:1, both above the 3:1 minimum. Deliberately skipped the full hover/tooltip layer
+  a production chart would have (native SVG `<title>` only) since every value is
+  already a direct label — an accepted scope reduction that came with choosing
+  hand-rolled over a library, not an oversight.
 - **Phase 9 — WebSocket streaming**: live token-by-token + pipeline-progress updates
 - **Phase 10 — Voice I/O**: speech-to-text input, streamed text-to-speech output
 - **Phase 11 — Tracing/observability**: request-level tracing (tokens, latency, cost)
@@ -158,7 +185,11 @@ phases are usable/demoable on their own, not just scaffolding.
 
 **Last updated:** 2026-07-30
 
-**Where we are:** ✅ **Phases 1-7 all done and verified.**
+**Where we are:** ✅ **Phases 1-7 done and verified; Phase 8 (chart generation) code complete,
+verification pending** (needs Ammar's machine to actually see a rendered chart in the browser —
+`detectChart()` itself was sanity-checked directly against realistic Postgres-shaped rows, including
+the numeric-as-string case, but nothing here has been visually confirmed in an actual browser yet).
+Phases 1-7 are merged to `main`; Phase 8 is on its own branch.
 
 **⚠️ Placeholder content reminder:** the `knowledge_base` table (seeded by
 `scripts/seedKnowledgeBase.mjs`) contains clearly fictional shipping/returns/payment/contact/about
@@ -429,8 +460,20 @@ rehydrate from Redis on page load — only the underlying conversation *memory* 
 a feature nobody asked for yet (an endpoint to fetch and redisplay a session's history on mount).
 Deferred rather than built speculatively; revisit if it turns out to matter in practice.
 
-**Next step:** Merge to `main`, then start Phase 8 — chart generation (auto-detect chart type from
-result rows).
+**Verified — Phase 8:** ⏳ not yet verified end to end — code complete, `npm run build`/`eslint`
+both pass, and `detectChart()` was sanity-checked directly (not just assumed) against realistic
+Postgres-shaped rows: price comparisons and `COUNT(*)`-per-category both correctly detected as bar
+charts even with values arriving as strings (`"10.00"`, `"12"`), a date+total shape correctly
+detected as a line chart, and a single-row result / text-only rows / an id-only numeric column all
+correctly returned `null` (no chart). What's *not* yet confirmed: does a chart actually render
+correctly in the browser — bar proportions, label truncation, dark mode, a cache-hit replaying its
+stored chart.
+
+**Next step:** Verify Phase 8 on Ammar's machine — ask a comparison question ("compare the prices of
+your 5 cheapest products") and confirm a bar chart renders below the text answer; ask something
+that returns a single fact and confirm no chart appears; if there's a way to get date-grouped data
+(e.g. products added per month), confirm a line chart renders. Then merge to `main` and start
+Phase 9 — WebSocket streaming (live token-by-token + pipeline-progress updates).
 
 **Open decisions not yet made:**
 - None blocking — Postgres client (`pg`) was decided and used in Phase 1 (see Tech Mapping table).

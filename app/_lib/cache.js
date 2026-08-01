@@ -42,10 +42,10 @@ const TTL_SECONDS = Number(process.env.SEMANTIC_CACHE_TTL_SECONDS) || 3600;
 // original Phase 4 concern: a follow-up that's never cached can't wrongly
 // match anything.
 
-// Returns the cached { answer, sqlUsed, rows } for the closest match above
-// the similarity threshold (and not older than TTL_SECONDS), or null if
-// there's history to consider (see above), no good-enough fresh match, or
-// the cache itself is unreachable — a cache-layer failure should never
+// Returns the cached { answer, sqlUsed, rows, chart } for the closest match
+// above the similarity threshold (and not older than TTL_SECONDS), or null
+// if there's history to consider (see above), no good-enough fresh match,
+// or the cache itself is unreachable — a cache-layer failure should never
 // break the user-facing answer, so callers get a miss instead of a thrown
 // error.
 export async function findSimilarCached(question, history = []) {
@@ -55,7 +55,7 @@ export async function findSimilarCached(question, history = []) {
     const embedding = await embedText(question);
     const vectorLiteral = toVectorLiteral(embedding);
     const result = await query(
-      `select id, answer, sql_used, rows, 1 - (embedding <=> $1::vector) as similarity
+      `select id, answer, sql_used, rows, chart, 1 - (embedding <=> $1::vector) as similarity
        from semantic_cache
        where created_at > now() - make_interval(secs => $2::int)
        order by embedding <=> $1::vector
@@ -74,7 +74,7 @@ export async function findSimilarCached(question, history = []) {
       best.id,
     ]).catch((err) => console.warn("Semantic cache hit-count update failed:", err.message));
 
-    return { answer: best.answer, sqlUsed: best.sql_used, rows: best.rows };
+    return { answer: best.answer, sqlUsed: best.sql_used, rows: best.rows, chart: best.chart };
   } catch (err) {
     console.warn("Semantic cache lookup failed, falling back to full pipeline:", err.message);
     return null;
@@ -86,16 +86,23 @@ export async function findSimilarCached(question, history = []) {
 // context-dependent follow-ups are deliberately never cached. Fire-and-
 // forget from the caller's point of view — a failed cache write should
 // never fail the request that already has a good answer to return.
-export async function storeCachedAnswer({ question, history = [], answer, sqlUsed, rows }) {
+export async function storeCachedAnswer({ question, history = [], answer, sqlUsed, rows, chart }) {
   if (history && history.length > 0) return;
 
   try {
     const embedding = await embedText(question);
     const vectorLiteral = toVectorLiteral(embedding);
     await query(
-      `insert into semantic_cache (question, embedding, answer, sql_used, rows)
-       values ($1, $2::vector, $3, $4, $5)`,
-      [question, vectorLiteral, answer, sqlUsed || null, rows ? JSON.stringify(rows) : null]
+      `insert into semantic_cache (question, embedding, answer, sql_used, rows, chart)
+       values ($1, $2::vector, $3, $4, $5, $6)`,
+      [
+        question,
+        vectorLiteral,
+        answer,
+        sqlUsed || null,
+        rows ? JSON.stringify(rows) : null,
+        chart ? JSON.stringify(chart) : null,
+      ]
     );
   } catch (err) {
     console.warn("Semantic cache write failed (answer was still returned to the user):", err.message);
