@@ -619,8 +619,23 @@ cost).
 control (`ALLOWED_ORIGINS` + `CHATBOT_SITE_KEY`, for calling this from the real Saamjh Store site on
 a different domain). Built, tested live, then deliberately reverted off `main` — Ammar wants this
 kind of store-specific/deployment config kept off the shared template history, on its own branch
-instead. Pick it up whenever ready to actually stand up a second deployment or wire up the real
-saam-s-store frontend; nothing about it depends on Phase 11+ work.
+instead.
+
+**Superseding decision, discussed after that branch was parked:** the actual plan is no longer "this
+chatbot as a separate service, called cross-origin from Saamjh Store." Once all remaining phases
+here are done, this chatbot gets **integrated directly into the Saamjh Store repo itself**, adopting
+Saamjh Store's own styling/UI rather than this repo's current standalone chat UI. Saamjh Store is
+itself meant to become the template going forward: clone the combined repo (storefront + chatbot
+native) per new client, swap in that client's products/styling, point at a fresh database. This
+makes the `claude/saamjh-store-config` branch's whole cross-origin layer (CORS allowlist, site key,
+`SameSite=None` cookie) **unnecessary** once the merge happens — that machinery only existed because
+the chatbot was a separate service on a different domain; a native integration is always same-origin,
+nothing to gate. That branch stays parked as-is (harmless, not worth deleting), just not the
+direction this is actually headed. One thing to carry into the merged repo regardless: keep the
+chatbot's DB access on its own restricted read-only role, separate from whatever role the storefront
+itself uses for checkout/inventory/orders — that boundary matters more once it's one codebase, not
+less. Pick this integration up once Phase 11 (and whatever comes after) is done; nothing about it
+depends on those phases, it's independent, later work.
 
 **Open decisions not yet made:**
 - None blocking — Postgres client (`pg`) was decided and used in Phase 1 (see Tech Mapping table).
